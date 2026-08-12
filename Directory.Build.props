@@ -4,7 +4,7 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
     <AnalysisLevel>latest-recommended</AnalysisLevel>
-    <Version>0.3.2-preview.1</Version>
+    <Version>0.4.0-preview.1</Version>
     <Deterministic>true</Deterministic>
     <PathMap>$(MSBuildThisFileDirectory)=/_/</PathMap>
     <DebugType Condition="'$(Configuration)' == 'Release'">none</DebugType>

@@ -13,8 +13,7 @@ public interface IProfileStore
 public sealed class JsonProfileStore(string? filePath = null) : IProfileStore
 {
     public string FilePath { get; } = filePath ?? Path.Combine(
-        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-        "PerDeviceMixer",
+        PerDeviceMixerDataPaths.GetDataDirectory(),
         "profiles.json");
 
     public async Task<MixerProfileDocument> LoadAsync(CancellationToken cancellationToken = default)
@@ -34,11 +33,13 @@ public sealed class JsonProfileStore(string? filePath = null) : IProfileStore
                 bufferSize: 4096,
                 FileOptions.Asynchronous | FileOptions.SequentialScan);
 
-            return await JsonSerializer.DeserializeAsync(
-                       stream,
-                       ProfileJsonContext.Default.MixerProfileDocument,
-                       cancellationToken).ConfigureAwait(false)
-                   ?? new MixerProfileDocument();
+            var document = await JsonSerializer.DeserializeAsync(
+                               stream,
+                               ProfileJsonContext.Default.MixerProfileDocument,
+                               cancellationToken).ConfigureAwait(false)
+                           ?? new MixerProfileDocument();
+            Normalize(document);
+            return document;
         }
         catch (JsonException)
         {
@@ -116,5 +117,22 @@ public sealed class JsonProfileStore(string? filePath = null) : IProfileStore
         {
             if (File.Exists(temporaryPath)) File.Delete(temporaryPath);
         }
+    }
+
+    private static void Normalize(MixerProfileDocument document)
+    {
+        document.SchemaVersion = MixerProfileDocument.CurrentSchemaVersion;
+        document.Settings ??= new MixerSettings();
+        document.Devices ??= new Dictionary<string, DeviceProfile>(StringComparer.OrdinalIgnoreCase);
+
+        if (document.Settings.UpdateCheckIntervalHours is not (6 or 24 or 72 or 168))
+        {
+            document.Settings.UpdateCheckIntervalHours = 24;
+        }
+
+        document.Settings.SaveDebounceMilliseconds = Math.Clamp(
+            document.Settings.SaveDebounceMilliseconds,
+            100,
+            5000);
     }
 }

@@ -7,6 +7,7 @@ namespace PerDeviceMixer.Audio;
 public sealed class CoreAudioService : IAudioService
 {
     private static readonly Guid EventContext = new("F464F931-E6D8-42F4-9BF1-4BC2DF2D08A8");
+    private const int MaximumSuppressedApplications = 256;
 
     private readonly AudioThreadDispatcher _dispatcher;
     private readonly DeviceNotificationClient _deviceNotifications;
@@ -372,7 +373,16 @@ public sealed class CoreAudioService : IAudioService
 
     private void SuppressApplicationEvents(string applicationKey)
     {
-        _suppressedApplicationEvents[applicationKey] = DateTime.UtcNow.AddMilliseconds(350);
+        var now = DateTime.UtcNow;
+        PruneSuppressedApplicationEvents(now);
+        if (_suppressedApplicationEvents.Count >= MaximumSuppressedApplications &&
+            !_suppressedApplicationEvents.ContainsKey(applicationKey))
+        {
+            var oldest = _suppressedApplicationEvents.MinBy(item => item.Value);
+            if (!string.IsNullOrEmpty(oldest.Key)) _suppressedApplicationEvents.Remove(oldest.Key);
+        }
+
+        _suppressedApplicationEvents[applicationKey] = now.AddMilliseconds(350);
     }
 
     private bool IsApplicationEventSuppressed(string applicationKey)
@@ -381,6 +391,18 @@ public sealed class CoreAudioService : IAudioService
         if (until >= DateTime.UtcNow) return true;
         _suppressedApplicationEvents.Remove(applicationKey);
         return false;
+    }
+
+    private void PruneSuppressedApplicationEvents(DateTime now)
+    {
+        if (_suppressedApplicationEvents.Count == 0) return;
+        foreach (var key in _suppressedApplicationEvents
+                     .Where(item => item.Value < now)
+                     .Select(item => item.Key)
+                     .ToArray())
+        {
+            _suppressedApplicationEvents.Remove(key);
+        }
     }
 
     private void DetachFromCurrentRenderDeviceCore()

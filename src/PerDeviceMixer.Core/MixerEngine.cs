@@ -1,14 +1,35 @@
+using System.Threading.Channels;
+
 namespace PerDeviceMixer.Core;
 
-public sealed class MixerEngine(IAudioService audio, IProfileStore profileStore) : IDisposable
+public sealed class MixerEngine : IDisposable
 {
+    private readonly IAudioService audio;
+    private readonly IProfileStore profileStore;
     private readonly SemaphoreSlim _operationLock = new(1, 1);
-    private CancellationTokenSource? _saveDebounce;
+    private readonly Channel<bool> _saveRequests = Channel.CreateBounded<bool>(
+        new BoundedChannelOptions(1)
+        {
+            FullMode = BoundedChannelFullMode.DropOldest,
+            SingleReader = true,
+            SingleWriter = false
+        });
+    private readonly CancellationTokenSource _saveWorkerShutdown = new();
+    private readonly Task _saveWorker;
     private MixerProfileDocument _document = new();
+    private long _saveRevision;
     private bool _isRestoring;
     private bool _disposed;
 
+    public MixerEngine(IAudioService audio, IProfileStore profileStore)
+    {
+        this.audio = audio;
+        this.profileStore = profileStore;
+        _saveWorker = Task.Run(RunSaveWorkerAsync);
+    }
+
     public event EventHandler<AudioStateChangedEventArgs>? MixerChanged;
+    public event EventHandler<ProfileSaveStateChangedEventArgs>? ProfileSaveStateChanged;
 
     public MixerProfileDocument Profiles => _document;
     public string ProfilePath => profileStore.FilePath;
@@ -23,6 +44,7 @@ public sealed class MixerEngine(IAudioService audio, IProfileStore profileStore)
         if (snapshot is null)
         {
             await profileStore.SaveAsync(_document, cancellationToken);
+            MarkSaved();
             return;
         }
 
@@ -135,17 +157,21 @@ public sealed class MixerEngine(IAudioService audio, IProfileStore profileStore)
                 _document.Settings.SaveDebounceMilliseconds,
                 100,
                 5000);
-            profileStore.Save(_document);
+            if (_document.Settings.UpdateCheckIntervalHours is not (6 or 24 or 72 or 168))
+            {
+                _document.Settings.UpdateCheckIntervalHours = 24;
+            }
         }
         finally
         {
             _operationLock.Release();
         }
+
+        ScheduleSave();
     }
 
     public async Task FlushAsync(CancellationToken cancellationToken = default)
     {
-        _saveDebounce?.Cancel();
         var snapshot = await GetSnapshotWithRetryAsync(3, cancellationToken);
         if (snapshot is not null)
         {
@@ -153,13 +179,13 @@ public sealed class MixerEngine(IAudioService audio, IProfileStore profileStore)
         }
         else
         {
-            await profileStore.SaveAsync(_document, cancellationToken);
+            await SaveDocumentAsync(cancellationToken);
+            MarkSaved();
         }
     }
 
     public void Flush()
     {
-        _saveDebounce?.Cancel();
         var snapshot = audio.GetDefaultMixerSnapshot();
         if (snapshot is not null)
         {
@@ -167,7 +193,16 @@ public sealed class MixerEngine(IAudioService audio, IProfileStore profileStore)
         }
         else
         {
-            profileStore.Save(_document);
+            _operationLock.Wait();
+            try
+            {
+                profileStore.Save(_document);
+                MarkSaved();
+            }
+            finally
+            {
+                _operationLock.Release();
+            }
         }
     }
 
@@ -178,6 +213,7 @@ public sealed class MixerEngine(IAudioService audio, IProfileStore profileStore)
         {
             UpdateDocument(snapshot);
             profileStore.Save(_document);
+            MarkSaved();
         }
         finally
         {
@@ -310,23 +346,61 @@ public sealed class MixerEngine(IAudioService audio, IProfileStore profileStore)
 
     private void ScheduleSave()
     {
-        _saveDebounce?.Cancel();
-        _saveDebounce?.Dispose();
-        _saveDebounce = new CancellationTokenSource();
-        var token = _saveDebounce.Token;
-        var delay = Math.Clamp(_document.Settings.SaveDebounceMilliseconds, 100, 5000);
+        if (_disposed) return;
+        Interlocked.Increment(ref _saveRevision);
+        RaiseSaveState(ProfileSaveState.Pending);
+        _saveRequests.Writer.TryWrite(true);
+    }
 
-        _ = Task.Run(async () =>
+    private async Task RunSaveWorkerAsync()
+    {
+        var reader = _saveRequests.Reader;
+        var cancellationToken = _saveWorkerShutdown.Token;
+
+        try
         {
-            try
+            while (await reader.WaitToReadAsync(cancellationToken).ConfigureAwait(false))
             {
-                await Task.Delay(delay, token);
-                await SaveDocumentAsync(token);
+                while (reader.TryRead(out _))
+                {
+                }
+
+                bool changedDuringDelay;
+                do
+                {
+                    var delay = Math.Clamp(_document.Settings.SaveDebounceMilliseconds, 100, 5000);
+                    await Task.Delay(delay, cancellationToken).ConfigureAwait(false);
+                    changedDuringDelay = false;
+                    while (reader.TryRead(out _)) changedDuringDelay = true;
+                }
+                while (changedDuringDelay);
+
+                var revision = Volatile.Read(ref _saveRevision);
+                try
+                {
+                    await SaveDocumentAsync(cancellationToken).ConfigureAwait(false);
+                    if (Volatile.Read(ref _saveRevision) == revision)
+                    {
+                        RaiseSaveState(ProfileSaveState.Saved);
+                    }
+                    else
+                    {
+                        _saveRequests.Writer.TryWrite(true);
+                    }
+                }
+                catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+                {
+                    break;
+                }
+                catch (Exception exception)
+                {
+                    RaiseSaveState(ProfileSaveState.Failed, exception);
+                }
             }
-            catch (OperationCanceledException)
-            {
-            }
-        }, token);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+        }
     }
 
     private async Task SaveDocumentAsync(CancellationToken cancellationToken)
@@ -351,6 +425,7 @@ public sealed class MixerEngine(IAudioService audio, IProfileStore profileStore)
         {
             UpdateDocument(snapshot);
             await profileStore.SaveAsync(_document, cancellationToken).ConfigureAwait(false);
+            MarkSaved();
         }
         finally
         {
@@ -447,13 +522,32 @@ public sealed class MixerEngine(IAudioService audio, IProfileStore profileStore)
 
     private static float Clamp(float volume) => Math.Clamp(volume, 0f, 1f);
 
+    private void MarkSaved()
+    {
+        RaiseSaveState(ProfileSaveState.Saved);
+    }
+
+    private void RaiseSaveState(ProfileSaveState state, Exception? exception = null)
+    {
+        if (_disposed) return;
+        ProfileSaveStateChanged?.Invoke(this, new ProfileSaveStateChangedEventArgs(state, exception));
+    }
+
     public void Dispose()
     {
         if (_disposed) return;
         _disposed = true;
         audio.StateChanged -= OnAudioStateChanged;
-        _saveDebounce?.Cancel();
-        _saveDebounce?.Dispose();
+        _saveRequests.Writer.TryComplete();
+        _saveWorkerShutdown.Cancel();
+        try
+        {
+            _saveWorker.Wait(TimeSpan.FromSeconds(2));
+        }
+        catch (AggregateException)
+        {
+        }
+        _saveWorkerShutdown.Dispose();
         audio.Dispose();
     }
 }

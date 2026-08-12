@@ -1,0 +1,72 @@
+<Window x:Class="PerDeviceMixer.App.FeedbackDialog"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="问题反馈"
+        Width="650"
+        Height="560"
+        MinWidth="520"
+        MinHeight="420"
+        WindowStartupLocation="CenterOwner"
+        Background="#101216"
+        Foreground="#F3F4F6"
+        FontFamily="Segoe UI">
+    <Grid Margin="22">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+        </Grid.RowDefinitions>
+
+        <StackPanel>
+            <TextBlock FontSize="22" FontWeight="SemiBold" Text="向 GitHub 提交问题" />
+            <TextBlock Margin="0,6,0,0"
+                       Foreground="#9CA3AF"
+                       Text="请先检查并编辑下面的信息。程序不会自动上传任何数据。" />
+        </StackPanel>
+
+        <CheckBox x:Name="IncludeDiagnosticsCheckBox"
+                  Grid.Row="1"
+                  Margin="0,16,0,10"
+                  Checked="OnDiagnosticsSelectionChanged"
+                  Unchecked="OnDiagnosticsSelectionChanged"
+                  Content="加入音频设备名称与数量（不含设备 ID、应用列表、配置和日志）" />
+
+        <TextBox x:Name="PreviewTextBox"
+                 Grid.Row="2"
+                 Padding="12"
+                 AcceptsReturn="True"
+                 AcceptsTab="True"
+                 HorizontalScrollBarVisibility="Auto"
+                 VerticalScrollBarVisibility="Auto"
+                 Background="#171A20"
+                 Foreground="#F3F4F6"
+                 BorderBrush="#343A46"
+                 BorderThickness="1"
+                 FontFamily="Consolas"
+                 FontSize="12"
+                 TextWrapping="Wrap" />
+
+        <TextBlock x:Name="StatusText"
+                   Grid.Row="3"
+                   Margin="0,10,0,0"
+                   Foreground="#9CA3AF"
+                   FontSize="12"
+                   Text="提交时将打开浏览器；如果尚未登录 GitHub，需要先登录。" />
+
+        <StackPanel Grid.Row="4"
+                    Margin="0,16,0,0"
+                    HorizontalAlignment="Right"
+                    Orientation="Horizontal">
+            <Button MinWidth="90" Margin="0,0,8,0" Padding="12,7" Click="OnCopyClick" Content="复制信息" />
+            <Button MinWidth="90" Margin="0,0,8,0" Padding="12,7" Click="OnCancelClick" Content="取消" />
+            <Button MinWidth="130"
+                    Padding="12,7"
+                    Background="#22A699"
+                    Foreground="White"
+                    Click="OnOpenGitHubClick"
+                    Content="在 GitHub 提交" />
+        </StackPanel>
+    </Grid>
+</Window>

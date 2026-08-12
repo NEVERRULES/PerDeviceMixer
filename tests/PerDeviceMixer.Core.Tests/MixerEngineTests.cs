@@ -137,6 +137,84 @@ public sealed class MixerEngineTests
             change.DeviceId == "capture-device" && change.Volume == 0.44f && change.Muted == true);
     }
 
+    [Fact]
+    public async Task SettingsAreAutomaticallySavedAfterTheDebounceInterval()
+    {
+        using var directory = new TemporaryDirectory();
+        var store = new JsonProfileStore(Path.Combine(directory.Path, "profiles.json"));
+        var audio = new FakeAudioService(CreateSnapshot("device-new", 0.42f, 0.67f));
+        using var engine = new MixerEngine(audio, store);
+        await engine.InitializeAsync();
+
+        engine.UpdateSettings(settings =>
+        {
+            settings.SaveDebounceMilliseconds = 100;
+            settings.AutomaticUpdateChecks = false;
+            settings.UpdateCheckIntervalHours = 72;
+        });
+
+        await WaitUntilAsync(async () =>
+        {
+            var loaded = await store.LoadAsync();
+            return !loaded.Settings.AutomaticUpdateChecks && loaded.Settings.UpdateCheckIntervalHours == 72;
+        });
+    }
+
+    [Fact]
+    public async Task AutomaticSavePublishesFailedStateWhenTheStoreWriteFails()
+    {
+        var store = new FailingAfterInitializationProfileStore(CreateSavedDocument());
+        var audio = new FakeAudioService(CreateSnapshot("device-known", 0.25f, 0.30f));
+        using var engine = new MixerEngine(audio, store);
+        await engine.InitializeAsync();
+        var failure = new TaskCompletionSource<ProfileSaveStateChangedEventArgs>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        engine.ProfileSaveStateChanged += (_, eventArgs) =>
+        {
+            if (eventArgs.State == ProfileSaveState.Failed) failure.TrySetResult(eventArgs);
+        };
+
+        engine.UpdateSettings(settings => settings.SaveDebounceMilliseconds = 100);
+
+        var failedState = await failure.Task.WaitAsync(TimeSpan.FromSeconds(3));
+        Assert.IsType<InvalidOperationException>(failedState.Exception);
+    }
+
+    [Fact]
+    public async Task ConcurrentVolumeNotificationsAreSerializedAndFlushed()
+    {
+        using var directory = new TemporaryDirectory();
+        var store = new JsonProfileStore(Path.Combine(directory.Path, "profiles.json"));
+        var audio = new FakeAudioService(CreateSnapshot("device-new", 0.42f, 0.67f));
+        using var engine = new MixerEngine(audio, store);
+        await engine.InitializeAsync();
+
+        Parallel.For(0, 64, index =>
+            audio.RaiseMasterVolumeChanged(index / 100f, index % 2 == 0));
+        audio.RaiseMasterVolumeChanged(0.73f, true);
+
+        await WaitUntilAsync(() => Task.FromResult(
+            engine.Profiles.Devices["device-new"].MasterVolume == 0.73f &&
+            engine.Profiles.Devices["device-new"].MasterMuted));
+        await engine.FlushAsync();
+
+        var loaded = await store.LoadAsync();
+        Assert.Equal(0.73f, loaded.Devices["device-new"].MasterVolume);
+        Assert.True(loaded.Devices["device-new"].MasterMuted);
+    }
+
+    private static async Task WaitUntilAsync(Func<Task<bool>> condition)
+    {
+        var timeout = DateTime.UtcNow.AddSeconds(3);
+        while (DateTime.UtcNow < timeout)
+        {
+            if (await condition()) return;
+            await Task.Delay(50);
+        }
+
+        Assert.Fail("The expected persisted state was not observed before the timeout.");
+    }
+
     private static MixerProfileDocument CreateSavedDocument()
     {
         var document = new MixerProfileDocument();
@@ -165,6 +243,32 @@ public sealed class MixerEngineTests
     private static MixerSnapshot CreateSnapshot(string deviceId, float master, float app) => new(
         new AudioEndpointInfo(deviceId, "Test device", true, master, false),
         [new AudioSessionInfo("session-1", "exe:test.exe", "Test", null, 42, false, app, false)]);
+
+    private sealed class FailingAfterInitializationProfileStore(MixerProfileDocument document) : IProfileStore
+    {
+        private int _saveCount;
+
+        public string FilePath => "failure-test.json";
+
+        public Task<MixerProfileDocument> LoadAsync(CancellationToken cancellationToken = default) =>
+            Task.FromResult(document);
+
+        public void Save(MixerProfileDocument value)
+        {
+            if (Interlocked.Increment(ref _saveCount) > 1)
+            {
+                throw new InvalidOperationException("Simulated profile write failure.");
+            }
+        }
+
+        public Task SaveAsync(
+            MixerProfileDocument value,
+            CancellationToken cancellationToken = default)
+        {
+            Save(value);
+            return Task.CompletedTask;
+        }
+    }
 
     private sealed class FakeAudioService(MixerSnapshot snapshot) : IAudioService
     {
@@ -222,13 +326,24 @@ public sealed class MixerEngineTests
             this,
             new AudioStateChangedEventArgs(AudioChangeKind.SessionCreated, _snapshot.Endpoint.Id, applicationKey));
 
-        public void RaiseMasterVolumeChanged(float volume, bool muted) => StateChanged?.Invoke(
-            this,
-            new AudioStateChangedEventArgs(
-                AudioChangeKind.MasterVolume,
-                _snapshot.Endpoint.Id,
-                volume: volume,
-                isMuted: muted));
+        public void RaiseMasterVolumeChanged(float volume, bool muted)
+        {
+            _snapshot = _snapshot with
+            {
+                Endpoint = _snapshot.Endpoint with
+                {
+                    MasterVolume = volume,
+                    IsMuted = muted
+                }
+            };
+            StateChanged?.Invoke(
+                this,
+                new AudioStateChangedEventArgs(
+                    AudioChangeKind.MasterVolume,
+                    _snapshot.Endpoint.Id,
+                    volume: volume,
+                    isMuted: muted));
+        }
 
         public void Dispose() { }
     }

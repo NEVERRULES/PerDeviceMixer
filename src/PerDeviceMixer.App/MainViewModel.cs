@@ -4,7 +4,6 @@ using System.Runtime.CompilerServices;
 using System.Windows;
 using System.Windows.Input;
 using System.Windows.Media.Imaging;
-using PerDeviceMixer.Audio;
 using PerDeviceMixer.Core;
 
 namespace PerDeviceMixer.App;
@@ -12,6 +11,13 @@ namespace PerDeviceMixer.App;
 public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
 {
     private readonly MixerEngine _engine;
+    private readonly ApplicationController _controller;
+    private readonly UpdateCoordinator _updates;
+    private readonly ApplicationIconProvider _iconProvider = new();
+    private readonly IReadOnlyList<UpdateIntervalOption> _updateIntervals = UpdateIntervalOption.All;
+    private readonly string _currentVersionText = "当前版本 " + ApplicationVersionInfo.Current;
+    private readonly string _installTypeText = InstallationDetector.GetDisplayName();
+    private readonly ApplicationInstallType _installType = InstallationDetector.GetInstallType();
     private string _currentDeviceName = "正在检测播放设备";
     private string _currentInputDeviceName = "正在检测录音设备";
     private string _settingsStatus = "设置会自动保存在本机";
@@ -30,22 +36,41 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
     private double _saveDebounceMilliseconds = 500;
     private bool _startWithWindows;
     private bool _minimizeToTrayOnClose = true;
+    private bool _automaticUpdateChecks = true;
+    private UpdateIntervalOption _selectedUpdateInterval = UpdateIntervalOption.All[1];
+    private string _updateStatus = "尚未检查更新";
+    private bool _isCheckingForUpdates;
+    private bool _isDownloadingUpdate;
+    private int _updateDownloadProgress;
+    private UpdateReleaseInfo? _availableRelease;
     private bool _disposed;
 
-    public MainViewModel()
+    internal MainViewModel(
+        MixerEngine engine,
+        ApplicationController controller,
+        UpdateCoordinator updates)
     {
-        _engine = new MixerEngine(new CoreAudioService(), new JsonProfileStore());
-        ShowMixerCommand = new RelayCommand(() => CurrentPage = AppPage.Mixer);
-        ShowDevicesCommand = new RelayCommand(() => CurrentPage = AppPage.Devices);
-        ShowSettingsCommand = new RelayCommand(() => CurrentPage = AppPage.Settings);
-        SaveCommand = new RelayCommand(SaveCurrentState);
+        _engine = engine;
+        _controller = controller;
+        _updates = updates;
+        ShowMixerCommand = new RelayCommand(() => NavigateTo(AppPage.Mixer));
+        ShowDevicesCommand = new RelayCommand(() => NavigateTo(AppPage.Devices));
+        ShowSettingsCommand = new RelayCommand(() => NavigateTo(AppPage.Settings));
         SetDefaultOutputCommand = new RelayCommand<AudioDeviceItem>(SetDefaultOutputDevice);
         SetDefaultInputCommand = new RelayCommand<AudioDeviceItem>(SetDefaultInputDevice);
         OpenDevicePropertiesCommand = new RelayCommand<AudioDeviceItem>(OpenDeviceProperties);
         OpenSoundDevicesCommand = new RelayCommand(SystemSoundSettings.OpenSoundDevices);
         AddBluetoothDeviceCommand = new RelayCommand(SystemSoundSettings.OpenBluetoothDevices);
         OpenMonoAudioSettingsCommand = new RelayCommand(SystemSoundSettings.OpenMonoAudioSettings);
+        CheckForUpdatesCommand = new AsyncRelayCommand(CheckForUpdatesAsync);
+        DownloadAndInstallUpdateCommand = new AsyncRelayCommand(DownloadAndInstallUpdateAsync);
+        OpenAvailableReleaseCommand = new RelayCommand(_controller.OpenAvailableRelease);
+        OpenProjectCommand = new RelayCommand(ApplicationController.OpenProject);
+        OpenReleasesCommand = new RelayCommand(ApplicationController.OpenReleases);
+        OpenFeedbackCommand = new RelayCommand(_controller.ShowFeedback);
         _engine.MixerChanged += OnMixerChanged;
+        _engine.ProfileSaveStateChanged += OnProfileSaveStateChanged;
+        _updates.StateChanged += OnUpdateStateChanged;
     }
 
     public event PropertyChangedEventHandler? PropertyChanged;
@@ -57,16 +82,23 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
     public ICommand ShowMixerCommand { get; }
     public ICommand ShowDevicesCommand { get; }
     public ICommand ShowSettingsCommand { get; }
-    public ICommand SaveCommand { get; }
     public ICommand SetDefaultOutputCommand { get; }
     public ICommand SetDefaultInputCommand { get; }
     public ICommand OpenDevicePropertiesCommand { get; }
     public ICommand OpenSoundDevicesCommand { get; }
     public ICommand AddBluetoothDeviceCommand { get; }
     public ICommand OpenMonoAudioSettingsCommand { get; }
+    public ICommand CheckForUpdatesCommand { get; }
+    public ICommand DownloadAndInstallUpdateCommand { get; }
+    public ICommand OpenAvailableReleaseCommand { get; }
+    public ICommand OpenProjectCommand { get; }
+    public ICommand OpenReleasesCommand { get; }
+    public ICommand OpenFeedbackCommand { get; }
 
-    public bool IsClosing { get; private set; }
     public bool ShouldMinimizeToTray => MinimizeToTrayOnClose;
+    public IReadOnlyList<UpdateIntervalOption> UpdateIntervals => _updateIntervals;
+    public string CurrentVersionText => _currentVersionText;
+    public string InstallTypeText => _installTypeText;
 
     private AppPage CurrentPage
     {
@@ -209,7 +241,7 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
         get => _saveDebounceMilliseconds;
         set
         {
-            var clamped = Math.Clamp(Math.Round(value / 100d) * 100d, 100d, 2000d);
+            var clamped = Math.Clamp(Math.Round(value / 100d) * 100d, 100d, 5000d);
             if (!SetField(ref _saveDebounceMilliseconds, clamped)) return;
             SaveSetting(settings => settings.SaveDebounceMilliseconds = (int)clamped);
         }
@@ -249,32 +281,84 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
         }
     }
 
+    public bool AutomaticUpdateChecks
+    {
+        get => _automaticUpdateChecks;
+        set
+        {
+            if (!SetField(ref _automaticUpdateChecks, value)) return;
+            SaveSetting(settings => settings.AutomaticUpdateChecks = value);
+            _updates.NotifySettingsChanged();
+            OnPropertyChanged(nameof(IsUpdateIntervalEnabled));
+        }
+    }
+
+    public bool IsUpdateIntervalEnabled => AutomaticUpdateChecks;
+
+    public UpdateIntervalOption SelectedUpdateInterval
+    {
+        get => _selectedUpdateInterval;
+        set
+        {
+            if (value is null || !SetField(ref _selectedUpdateInterval, value)) return;
+            SaveSetting(settings => settings.UpdateCheckIntervalHours = value.Hours);
+            _updates.NotifySettingsChanged();
+        }
+    }
+
+    public string UpdateStatus
+    {
+        get => _updateStatus;
+        private set => SetField(ref _updateStatus, value);
+    }
+
+    public bool IsCheckingForUpdates
+    {
+        get => _isCheckingForUpdates;
+        private set => SetField(ref _isCheckingForUpdates, value);
+    }
+
+    public bool IsDownloadingUpdate
+    {
+        get => _isDownloadingUpdate;
+        private set
+        {
+            if (!SetField(ref _isDownloadingUpdate, value)) return;
+            OnPropertyChanged(nameof(CanDownloadAndInstallUpdate));
+        }
+    }
+
+    public int UpdateDownloadProgress
+    {
+        get => _updateDownloadProgress;
+        private set => SetField(ref _updateDownloadProgress, value);
+    }
+
+    public bool IsUpdateAvailable => _availableRelease is not null;
+    public bool CanDownloadAndInstallUpdate =>
+        IsUpdateAvailable &&
+        !IsDownloadingUpdate &&
+        _installType == ApplicationInstallType.Installed;
+    public string UpdateActionText => _installType == ApplicationInstallType.Installed
+        ? "下载并安装"
+        : "便携版请打开下载页";
+    public string AvailableVersionText => _availableRelease is null
+        ? string.Empty
+        : $"可用版本 {_availableRelease.Version}";
+
     public async Task InitializeAsync()
     {
         try
         {
-            await _engine.InitializeAsync();
             LoadSettings();
             RefreshSnapshot();
             RefreshDevices();
+            await Task.CompletedTask;
         }
         catch (Exception exception)
         {
             CurrentDeviceName = "音频服务启动失败";
             SettingsStatus = "初始化失败：" + exception.Message;
-        }
-    }
-
-    public void Close()
-    {
-        IsClosing = true;
-        try
-        {
-            _engine.Flush();
-        }
-        finally
-        {
-            Dispose();
         }
     }
 
@@ -292,6 +376,9 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
         _saveDebounceMilliseconds = settings.SaveDebounceMilliseconds;
         _startWithWindows = StartupManager.IsEnabled;
         _minimizeToTrayOnClose = settings.CloseBehavior == CloseBehavior.MinimizeToTray;
+        _automaticUpdateChecks = settings.AutomaticUpdateChecks;
+        _selectedUpdateInterval = UpdateIntervalOption.All.FirstOrDefault(
+            item => item.Hours == settings.UpdateCheckIntervalHours) ?? UpdateIntervalOption.All[1];
         _settingsReady = true;
 
         OnPropertyChanged(nameof(AutoLearn));
@@ -302,6 +389,10 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
         OnPropertyChanged(nameof(StartWithWindows));
         OnPropertyChanged(nameof(MinimizeToTrayOnClose));
         OnPropertyChanged(nameof(ShouldMinimizeToTray));
+        OnPropertyChanged(nameof(AutomaticUpdateChecks));
+        OnPropertyChanged(nameof(IsUpdateIntervalEnabled));
+        OnPropertyChanged(nameof(SelectedUpdateInterval));
+        ApplyUpdateState(_updates.CurrentState);
     }
 
     private void SaveSetting(Action<MixerSettings> update)
@@ -310,7 +401,6 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
         try
         {
             _engine.UpdateSettings(update);
-            SettingsStatus = $"设置已保存 · {DateTime.Now:T}";
         }
         catch (Exception exception)
         {
@@ -323,6 +413,61 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
         var dispatcher = System.Windows.Application.Current?.Dispatcher;
         if (dispatcher is null || dispatcher.HasShutdownStarted) return;
         _ = dispatcher.BeginInvoke(() => ApplyAudioChange(eventArgs));
+    }
+
+    private void OnProfileSaveStateChanged(object? sender, ProfileSaveStateChangedEventArgs eventArgs)
+    {
+        var dispatcher = System.Windows.Application.Current?.Dispatcher;
+        if (dispatcher is null || dispatcher.HasShutdownStarted) return;
+        _ = dispatcher.BeginInvoke(() =>
+        {
+            if (_disposed) return;
+            SettingsStatus = eventArgs.State switch
+            {
+                ProfileSaveState.Pending => "正在自动保存…",
+                ProfileSaveState.Saved => $"已自动保存 · {DateTime.Now:T}",
+                ProfileSaveState.Failed => "自动保存失败：" + eventArgs.Exception?.Message,
+                _ => SettingsStatus
+            };
+        });
+    }
+
+    private void OnUpdateStateChanged(object? sender, UpdateStateChangedEventArgs eventArgs)
+    {
+        var dispatcher = System.Windows.Application.Current?.Dispatcher;
+        if (dispatcher is null || dispatcher.HasShutdownStarted) return;
+        _ = dispatcher.BeginInvoke(() => ApplyUpdateState(eventArgs.State));
+    }
+
+    private void ApplyUpdateState(UpdateState state)
+    {
+        if (_disposed) return;
+        _availableRelease = state.AvailableRelease;
+        UpdateStatus = state.Message;
+        IsCheckingForUpdates = state.IsChecking;
+        IsDownloadingUpdate = state.IsDownloading;
+        UpdateDownloadProgress = state.DownloadProgress;
+        OnPropertyChanged(nameof(IsUpdateAvailable));
+        OnPropertyChanged(nameof(CanDownloadAndInstallUpdate));
+        OnPropertyChanged(nameof(UpdateActionText));
+        OnPropertyChanged(nameof(AvailableVersionText));
+    }
+
+    private async Task CheckForUpdatesAsync()
+    {
+        await _updates.CheckAsync(manual: true);
+    }
+
+    private async Task DownloadAndInstallUpdateAsync()
+    {
+        try
+        {
+            await _controller.DownloadAndInstallAvailableUpdateAsync();
+        }
+        catch (Exception exception)
+        {
+            UpdateStatus = "更新失败：" + exception.Message;
+        }
     }
 
     private void ApplyAudioChange(AudioStateChangedEventArgs eventArgs)
@@ -451,8 +596,10 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
                     Applications.Add(new ApplicationMixerItem(
                         session.ApplicationKey,
                         session.DisplayName,
-                        session.ExecutablePath,
-                        session.IsSystemSounds,
+                        _iconProvider.GetIcon(
+                            session.ApplicationKey,
+                            session.ExecutablePath,
+                            session.IsSystemSounds),
                         session.Volume * 100d,
                         session.IsMuted,
                         ApplyApplicationChange));
@@ -597,21 +744,21 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
         if (_disposed) return;
         _disposed = true;
         _engine.MixerChanged -= OnMixerChanged;
-        _engine.Dispose();
+        _engine.ProfileSaveStateChanged -= OnProfileSaveStateChanged;
+        _updates.StateChanged -= OnUpdateStateChanged;
+        Applications.Clear();
+        OutputDevices.Clear();
+        InputDevices.Clear();
+        _iconProvider.Dispose();
     }
 
-    public void SaveCurrentState()
+    private void NavigateTo(AppPage page)
     {
-        try
-        {
-            _engine.Flush();
-            SettingsStatus = $"当前音量已保存 · {DateTime.Now:T}";
-        }
-        catch (Exception exception)
-        {
-            SettingsStatus = "保存失败：" + exception.Message;
-        }
+        _controller.EnsurePageResources(page);
+        CurrentPage = page;
     }
+
+    internal void NavigateToSettings() => NavigateTo(AppPage.Settings);
 }
 
 public sealed record AudioDeviceItem(
@@ -663,6 +810,31 @@ internal sealed class RelayCommand<T>(Action<T> execute) : ICommand where T : cl
     }
 }
 
+internal sealed class AsyncRelayCommand(Func<Task> execute) : ICommand
+{
+    private bool _executing;
+
+    public event EventHandler? CanExecuteChanged;
+
+    public bool CanExecute(object? parameter) => !_executing;
+
+    public async void Execute(object? parameter)
+    {
+        if (_executing) return;
+        _executing = true;
+        CanExecuteChanged?.Invoke(this, EventArgs.Empty);
+        try
+        {
+            await execute();
+        }
+        finally
+        {
+            _executing = false;
+            CanExecuteChanged?.Invoke(this, EventArgs.Empty);
+        }
+    }
+}
+
 public sealed class ApplicationMixerItem : INotifyPropertyChanged
 {
     private readonly Action<string, double, bool?> _apply;
@@ -673,15 +845,14 @@ public sealed class ApplicationMixerItem : INotifyPropertyChanged
     public ApplicationMixerItem(
         string applicationKey,
         string displayName,
-        string? executablePath,
-        bool isSystemSounds,
+        BitmapSource iconSource,
         double volume,
         bool isMuted,
         Action<string, double, bool?> apply)
     {
         ApplicationKey = applicationKey;
         DisplayName = displayName;
-        IconSource = ApplicationIconProvider.GetIcon(applicationKey, executablePath, isSystemSounds);
+        IconSource = iconSource;
         _volume = volume;
         _isMuted = isMuted;
         _apply = apply;
@@ -731,4 +902,18 @@ public sealed class ApplicationMixerItem : INotifyPropertyChanged
             _updatingFromAudio = false;
         }
     }
+}
+
+
+public sealed record UpdateIntervalOption(int Hours, string Label)
+{
+    public static IReadOnlyList<UpdateIntervalOption> All { get; } =
+    [
+        new(6, "每 6 小时"),
+        new(24, "每天"),
+        new(72, "每 3 天"),
+        new(168, "每 7 天")
+    ];
+
+    public override string ToString() => Label;
 }

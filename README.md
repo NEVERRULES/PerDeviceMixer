@@ -8,7 +8,7 @@
   按输出设备自动记忆并恢复主音量、应用音量和静音状态的 Windows 本地音量管理器。
 </p>
 
-> 当前版本：`0.3.2-preview.1`。项目仍处于预览阶段，建议首次使用时保留 Windows 原生声音设置作为备用入口。
+> 当前源码版本：`0.4.0-preview.1`；最新公开版本：`0.3.2-preview.1`。项目仍处于预览阶段，建议首次使用时保留 Windows 原生声音设置作为备用入口。
 
 ## 项目解决什么问题
 
@@ -53,12 +53,16 @@ PerDeviceMixer 将输出设备本身视为配置。你正常调整音量后，�
 
 ### 后台与设置
 
-- 系统托盘菜单：打开窗口、切换主静音、切换输出设备或退出；
+- 关闭到托盘后销毁完整窗口和页面树，仅保留音频监听、托盘和更新调度；
+- 使用与主界面一致的深色 WPF 托盘菜单，可打开窗口、切换主静音、切换输出设备、检查更新、反馈问题、访问项目主页或退出；
 - 单实例运行：重复启动只会唤醒已有窗口；
 - 可选择点击关闭按钮后直接退出，或最小化到托盘；
 - 可选择登录 Windows 后自动在托盘中启动；
 - 可调整自动学习、自动恢复、新会话恢复、静音状态保存和保存延迟；
-- 配置以 JSON 形式保存在 `%LocalAppData%\PerDeviceMixer\profiles.json`。
+- 所有设置和音量变化都会自动异步保存，设置页会显示保存状态；退出和更新安装交接前会刷新剩余更改；
+- 可手动检查 GitHub Releases 更新，也可设置每 6 小时、1 天、3 天或 7 天自动检查；
+- 安装版可校验 `SHA256SUMS.txt` 后打开可见安装向导，便携版会打开 Release 下载页；
+- 配置以 schema v2 JSON 形式保存在 `%LocalAppData%\PerDeviceMixer\profiles.json`，旧配置会自动迁移。
 
 ## 安装方法
 
@@ -68,7 +72,7 @@ PerDeviceMixer 提供 EXE 安装程序和免安装便携版。两种官方发布
 ### 方法一：EXE 安装程序（推荐）
 
 1. 准备 Windows 10/11 x64 系统。
-2. 从本项目的 [Releases](../../releases/latest) 页面下载文件名以 `Setup.exe` 结尾的安装程序。
+2. 从本项目的 [Releases](https://github.com/NEVERRULES/PerDeviceMixer/releases) 页面下载文件名以 `Setup.exe` 结尾的安装程序。
 3. 运行安装程序，可按需勾选桌面快捷方式。
 4. 从开始菜单或桌面启动 PerDeviceMixer。
 
@@ -81,7 +85,7 @@ PerDeviceMixer 提供 EXE 安装程序和免安装便携版。两种官方发布
 
 ### 方法二：免安装便携版
 
-1. 从 [Releases](../../releases/latest) 下载文件名以 `Portable.zip` 结尾的压缩包。
+1. 从 [Releases](https://github.com/NEVERRULES/PerDeviceMixer/releases) 下载文件名以 `Portable.zip` 结尾的压缩包。
 2. 将压缩包完整解压到一个固定目录。
 3. 双击 `PerDeviceMixer.App.exe`。
 
@@ -128,7 +132,7 @@ dotnet run --project src\PerDeviceMixer.App\PerDeviceMixer.App.csproj -c Release
 校验下载文件：
 
 ```powershell
-Get-FileHash .\PerDeviceMixer-0.3.2-preview.1-win-x64-Setup.exe -Algorithm SHA256
+Get-FileHash .\PerDeviceMixer-0.4.0-preview.1-win-x64-Setup.exe -Algorithm SHA256
 ```
 
 将结果与 `SHA256SUMS.txt` 中对应文件的值比较。
@@ -206,13 +210,12 @@ Get-FileHash .\PerDeviceMixer-0.3.2-preview.1-win-x64-Setup.exe -Algorithm SHA25
 - 如果某个应用在 Windows 中被固定路由到其他输出设备，它可能不会出现在当前默认设备的合成器中。
 - 应用图标从可执行文件中读取；受权限或打包方式限制时会使用通用图标。
 - 音频格式、增强、空间音效等功能由 Windows 和设备驱动提供，PerDeviceMixer 当前负责打开对应设置入口。
-- 项目仍处于预览阶段，尚未提供自动更新和数字签名。
+- 项目仍处于预览阶段，安装程序尚未提供数字签名。
 
 ## 数据与隐私
 
-- 无账号系统；
-- 无遥测；
-- 无网络 API；
+- 不提供账号、遥测、远程同步或后台服务；仅在启用更新检查、打开项目链接或提交反馈时访问 GitHub；
+- 更新检查不会上传音量配置、设备 ID、应用列表或日志；
 - 音量配置只写入当前用户的本地应用数据目录；
 - 配置文件损坏时，原文件会被重命名为带时间戳的 `.corrupt-*` 文件，然后创建新配置。
 
@@ -226,8 +229,17 @@ src/
 └─ PerDeviceMixer.Probe/  音频状态诊断与开发测试工具
 
 tests/
-└─ PerDeviceMixer.Core.Tests/
+├─ PerDeviceMixer.Core.Tests/
+└─ PerDeviceMixer.App.Tests/
 ```
+
+## 项目文档
+
+- [项目总手册](docs/PROJECT_GUIDE.md)：产品原则、架构、数据模型和关键运行流程；
+- [开发状态](docs/DEVELOPMENT_STATUS.md)：当前完成度、验证基线、已知限制和路线图；
+- [开发与贡献指南](CONTRIBUTING.md)：环境、工作流、回归测试和发布清单；
+- [V1 原始规格](specs/per-device-mixer/requirements.md)：需求、设计和实施任务；
+- [AGENTS.md](AGENTS.md)：供新对话和自动化开发工具快速接手项目。
 
 ## 开发与测试
 
