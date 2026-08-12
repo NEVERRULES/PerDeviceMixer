@@ -55,6 +55,32 @@ public sealed class JsonProfileStoreTests
         Assert.Single(Directory.GetFiles(directory.Path, "profiles.json.corrupt-*"));
     }
 
+    [Fact]
+    public async Task LoadAsyncMigratesVersionOneSettingsToSchemaVersionTwo()
+    {
+        using var directory = new TemporaryDirectory();
+        var path = Path.Combine(directory.Path, "profiles.json");
+        await File.WriteAllTextAsync(path, """
+            {
+              "SchemaVersion": 1,
+              "Settings": {
+                "AutoLearn": true,
+                "UpdateCheckIntervalHours": 999
+              },
+              "Devices": {}
+            }
+            """);
+        var store = new JsonProfileStore(path);
+
+        var loaded = await store.LoadAsync();
+
+        Assert.Equal(MixerProfileDocument.CurrentSchemaVersion, loaded.SchemaVersion);
+        Assert.True(loaded.Settings.AutomaticUpdateChecks);
+        Assert.Equal(24, loaded.Settings.UpdateCheckIntervalHours);
+        Assert.Null(loaded.Settings.LastSuccessfulUpdateCheckUtc);
+        Assert.Null(loaded.Settings.LastUpdateAttemptUtc);
+    }
+
     private static MixerProfileDocument CreateDocument()
     {
         var document = new MixerProfileDocument();

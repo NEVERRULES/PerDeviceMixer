@@ -25,5 +25,6 @@ Windows 会为部分输出设备记住主音量，但不会为每个设备分别
 
 - 同一 Endpoint 内部的 Realtek 插孔状态识别
 - 蓝牙 Stereo、Hands-Free、LE Audio 的物理设备合并
-- Windows 服务、自动更新和安装包
+- Windows 服务和自动更新
+- 在应用内直接实现所有由 Windows 或设备驱动提供的格式、增强和空间音效控制
 - 云同步、账号或遥测

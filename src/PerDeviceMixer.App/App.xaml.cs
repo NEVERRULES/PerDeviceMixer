@@ -13,9 +13,10 @@ public partial class App : System.Windows.Application, IDisposable
     private EventWaitHandle? _showSignal;
     private EventWaitHandle? _shutdownSignal;
     private Task? _watchTask;
+    private ApplicationController? _controller;
     private bool _ownsInstance;
 
-    protected override void OnStartup(StartupEventArgs e)
+    protected override async void OnStartup(StartupEventArgs e)
     {
         _instanceMutex = new Mutex(initiallyOwned: true, InstanceMutexName, out var createdNew);
         _ownsInstance = createdNew;
@@ -30,18 +31,28 @@ public partial class App : System.Windows.Application, IDisposable
         }
 
         base.OnStartup(e);
+        ShutdownMode = System.Windows.ShutdownMode.OnExplicitShutdown;
         _showSignal = new EventWaitHandle(false, EventResetMode.AutoReset, ShowSignalName);
         _shutdownSignal = new EventWaitHandle(false, EventResetMode.ManualReset, ShutdownSignalName);
         _watchTask = Task.Run(WatchForShowRequests);
 
         var startMinimized = e.Args.Contains("--minimized", StringComparer.OrdinalIgnoreCase);
-        var window = new MainWindow(startMinimized)
+        try
         {
-            ShowInTaskbar = !startMinimized,
-            WindowState = startMinimized ? WindowState.Minimized : WindowState.Normal
-        };
-        MainWindow = window;
-        window.Show();
+            _controller = new ApplicationController(this);
+            await _controller.InitializeAsync();
+            if (startMinimized) _controller.EnterTrayMode();
+            else _controller.ShowWindow();
+        }
+        catch (Exception exception)
+        {
+            MessageBox.Show(
+                "PerDeviceMixer 启动失败：" + exception.Message,
+                "PerDeviceMixer",
+                MessageBoxButton.OK,
+                MessageBoxImage.Error);
+            Shutdown(1);
+        }
     }
 
     private void WatchForShowRequests()
@@ -52,15 +63,42 @@ public partial class App : System.Windows.Application, IDisposable
         {
             _ = Dispatcher.BeginInvoke(() =>
             {
-                if (MainWindow is MainWindow window) window.ActivateFromExternal();
+                _controller?.ShowWindow();
             });
         }
     }
 
     protected override void OnExit(ExitEventArgs e)
     {
+        _controller?.Dispose();
+        _controller = null;
         Dispose();
         base.OnExit(e);
+    }
+
+    internal bool ReleaseInstanceMutexForUpdate()
+    {
+        if (!_ownsInstance || _instanceMutex is null) return false;
+        _instanceMutex.ReleaseMutex();
+        _instanceMutex.Dispose();
+        _instanceMutex = null;
+        _ownsInstance = false;
+        return true;
+    }
+
+    internal bool TryReacquireInstanceMutex()
+    {
+        if (_ownsInstance) return true;
+        var mutex = new Mutex(initiallyOwned: true, InstanceMutexName, out var createdNew);
+        if (!createdNew)
+        {
+            mutex.Dispose();
+            return false;
+        }
+
+        _instanceMutex = mutex;
+        _ownsInstance = true;
+        return true;
     }
 
     public void Dispose()

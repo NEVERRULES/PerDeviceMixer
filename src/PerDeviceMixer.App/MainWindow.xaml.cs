@@ -1,62 +1,53 @@
 using System.ComponentModel;
-using System.IO;
 using System.Windows;
+using PerDeviceMixer.Core;
 
 namespace PerDeviceMixer.App;
 
 public partial class MainWindow : Window, IDisposable
 {
-    private readonly MainViewModel _viewModel = new();
-    private readonly bool _startMinimized;
-    private TrayIconService? _trayIcon;
+    private readonly ApplicationController _controller;
+    private readonly MixerEngine _engine;
+    private readonly MainViewModel _viewModel;
     private bool _forceExit;
     private bool _disposed;
 
-    public MainWindow(bool startMinimized = false)
+    internal MainWindow(
+        ApplicationController controller,
+        MixerEngine engine,
+        UpdateCoordinator updates)
     {
-        _startMinimized = startMinimized;
+        _controller = controller;
+        _engine = engine;
+        _viewModel = new MainViewModel(engine, controller, updates);
         InitializeComponent();
         DataContext = _viewModel;
-        _trayIcon = new TrayIconService(_viewModel);
-        _trayIcon.ShowRequested += OnTrayShowRequested;
-        _trayIcon.ExitRequested += OnTrayExitRequested;
         Loaded += OnLoaded;
         Closing += OnClosing;
         Closed += OnClosed;
     }
 
-    private async void OnLoaded(object sender, RoutedEventArgs eventArgs)
-    {
+    private async void OnLoaded(object sender, RoutedEventArgs eventArgs) =>
         await _viewModel.InitializeAsync();
-        if (_startMinimized)
-        {
-            HideToTray();
-        }
-    }
 
     private void OnClosing(object? sender, CancelEventArgs eventArgs)
     {
-        if (!_forceExit && _viewModel.ShouldMinimizeToTray)
+        if (_forceExit || _controller.IsExiting)
         {
-            eventArgs.Cancel = true;
-            HideToTray();
+            _controller.BeginExitFromWindow();
             return;
         }
 
-        try
+        if (_engine.Profiles.Settings.CloseBehavior != CloseBehavior.MinimizeToTray)
         {
-            if (!_viewModel.IsClosing) _viewModel.Close();
-        }
-        catch (Exception exception)
-        {
-            WriteShutdownError(exception);
+            _controller.BeginExitFromWindow();
         }
     }
 
     private void OnClosed(object? sender, EventArgs eventArgs)
     {
         Dispose();
-        System.Windows.Application.Current.Shutdown();
+        _controller.OnWindowClosed(this);
     }
 
     private void OnMinimizeClick(object sender, RoutedEventArgs eventArgs) =>
@@ -69,60 +60,37 @@ public partial class MainWindow : Window, IDisposable
 
     private void OnCloseClick(object sender, RoutedEventArgs eventArgs) => Close();
 
-    private void OnTrayShowRequested(object? sender, EventArgs eventArgs) => ShowFromTray();
+    internal void ActivateWindow()
+    {
+        if (WindowState == WindowState.Minimized) WindowState = WindowState.Normal;
+        Show();
+        Activate();
+    }
 
-    private void OnTrayExitRequested(object? sender, EventArgs eventArgs)
+    internal void CloseForExit()
     {
         _forceExit = true;
         Close();
     }
 
-    private void HideToTray()
+    internal void ShowSettings()
     {
-        ShowInTaskbar = false;
-        Hide();
-    }
-
-    private void ShowFromTray()
-    {
-        ShowInTaskbar = true;
-        Show();
-        if (WindowState == WindowState.Minimized) WindowState = WindowState.Normal;
-        Activate();
-    }
-
-    internal void ActivateFromExternal() => ShowFromTray();
-
-    private static void WriteShutdownError(Exception exception)
-    {
-        try
-        {
-            var directory = Path.Combine(
-                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-                "PerDeviceMixer",
-                "logs");
-            Directory.CreateDirectory(directory);
-            File.AppendAllText(
-                Path.Combine(directory, "shutdown-errors.log"),
-                $"[{DateTimeOffset.Now:O}] {exception}\n");
-        }
-        catch
-        {
-        }
+        _viewModel.NavigateToSettings();
+        ActivateWindow();
     }
 
     public void Dispose()
     {
         if (_disposed) return;
         _disposed = true;
-        if (_trayIcon is not null)
-        {
-            _trayIcon.ShowRequested -= OnTrayShowRequested;
-            _trayIcon.ExitRequested -= OnTrayExitRequested;
-            _trayIcon.Dispose();
-            _trayIcon = null;
-        }
+        Loaded -= OnLoaded;
+        Closing -= OnClosing;
+        Closed -= OnClosed;
+        DataContext = null;
         _viewModel.Dispose();
+        Content = null;
+        Resources.Clear();
+        Icon = null;
         GC.SuppressFinalize(this);
     }
 }

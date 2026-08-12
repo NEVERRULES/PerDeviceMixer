@@ -4,7 +4,9 @@ namespace PerDeviceMixer.Core;
 
 public sealed class MixerProfileDocument
 {
-    public int SchemaVersion { get; set; } = 1;
+    public const int CurrentSchemaVersion = 2;
+
+    public int SchemaVersion { get; set; } = CurrentSchemaVersion;
     public MixerSettings Settings { get; set; } = new();
     public Dictionary<string, DeviceProfile> Devices { get; set; } =
         new(StringComparer.OrdinalIgnoreCase);
@@ -19,6 +21,10 @@ public sealed class MixerSettings
     public int SaveDebounceMilliseconds { get; set; } = 500;
     public bool StartWithWindows { get; set; }
     public CloseBehavior CloseBehavior { get; set; } = CloseBehavior.MinimizeToTray;
+    public bool AutomaticUpdateChecks { get; set; } = true;
+    public int UpdateCheckIntervalHours { get; set; } = 24;
+    public DateTimeOffset? LastSuccessfulUpdateCheckUtc { get; set; }
+    public DateTimeOffset? LastUpdateAttemptUtc { get; set; }
 }
 
 public enum CloseBehavior

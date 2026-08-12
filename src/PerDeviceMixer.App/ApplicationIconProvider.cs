@@ -5,16 +5,16 @@ using System.Windows.Media.Imaging;
 
 namespace PerDeviceMixer.App;
 
-internal static class ApplicationIconProvider
+internal sealed class ApplicationIconProvider : IDisposable
 {
-    private static readonly ConcurrentDictionary<string, BitmapSource> Cache =
+    private readonly ConcurrentDictionary<string, BitmapSource> _cache =
         new(StringComparer.OrdinalIgnoreCase);
 
-    public static BitmapSource GetIcon(
+    public BitmapSource GetIcon(
         string applicationKey,
         string? executablePath,
         bool isSystemSounds) =>
-        Cache.GetOrAdd(applicationKey, _ => CreateIcon(executablePath, isSystemSounds));
+        _cache.GetOrAdd(applicationKey, _ => CreateIcon(executablePath, isSystemSounds));
 
     private static BitmapSource CreateIcon(string? executablePath, bool isSystemSounds)
     {
@@ -53,4 +53,6 @@ internal static class ApplicationIconProvider
             extractedIcon?.Dispose();
         }
     }
+
+    public void Dispose() => _cache.Clear();
 }
