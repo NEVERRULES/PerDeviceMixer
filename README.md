@@ -62,19 +62,35 @@ PerDeviceMixer 将输出设备本身视为配置。你正常调整音量后，�
 
 ## 安装方法
 
-PerDeviceMixer 当前提供免安装的便携版，没有 MSI 或 EXE 安装向导。
+PerDeviceMixer 提供 EXE 安装程序和免安装便携版。两种官方发布包都包含运行所需的
+.NET 组件，不要求目标电脑另行安装 .NET Runtime。
 
-### 方法一：使用发布包
+### 方法一：EXE 安装程序（推荐）
 
 1. 准备 Windows 10/11 x64 系统。
-2. 安装 x64 版 **.NET 10 Desktop Runtime**。
-3. 从本项目的 [Releases](../../releases/latest) 页面下载 Windows x64 发布包。
-4. 将压缩包完整解压到一个固定目录。
-5. 双击 `PerDeviceMixer.App.exe`。
+2. 从本项目的 [Releases](../../releases/latest) 页面下载文件名以 `Setup.exe` 结尾的安装程序。
+3. 运行安装程序，可按需勾选桌面快捷方式。
+4. 从开始菜单或桌面启动 PerDeviceMixer。
+
+安装程序按当前 Windows 用户安装，不需要管理员权限，并会在“设置 → 应用 →
+已安装的应用”中提供标准卸载入口。卸载程序默认保留 `%LocalAppData%\PerDeviceMixer`
+中的音量配置，重新安装后可以继续使用；如需彻底清除，可在卸载后手动删除该目录。
+
+> 当前预览版尚未使用代码签名证书，Windows 可能显示“未知发布者”。请确认下载地址属于
+> 本项目，并用 Release 中的 `SHA256SUMS.txt` 校验文件完整性。
+
+### 方法二：免安装便携版
+
+1. 从 [Releases](../../releases/latest) 下载文件名以 `Portable.zip` 结尾的压缩包。
+2. 将压缩包完整解压到一个固定目录。
+3. 双击 `PerDeviceMixer.App.exe`。
+
+便携版不会创建安装和卸载记录，也不会自动创建快捷方式。程序配置仍保存在
+`%LocalAppData%\PerDeviceMixer`，因此更换程序目录不会丢失已有音量配置。
 
 如果 Releases 页面暂时没有可下载文件，可以按下面的方法从源码构建。
 
-### 方法二：从源码构建
+### 方法三：从源码构建
 
 需要 Windows 和 `.NET SDK 10.0.303`，或同一功能带的兼容补丁版本。
 
@@ -86,20 +102,36 @@ dotnet test PerDeviceMixer.slnx -c Release --no-build
 dotnet run --project src\PerDeviceMixer.App\PerDeviceMixer.App.csproj -c Release
 ```
 
-生成 Windows x64 便携发布包：
+生成供开发验证的 Windows x64 发布目录：
 
 ```powershell
 .\build-release.ps1
 ```
 
-脚本会先执行还原、Release 构建和测试，再将 Windows x64 便携版生成到
-`artifacts\PerDeviceMixer-win-x64`。发布包仍然需要目标电脑安装 .NET 10 Desktop Runtime。
+脚本会先执行还原、Release 构建和测试，再将 Windows x64 发布目录生成到
+`artifacts\PerDeviceMixer-win-x64`。默认输出需要目标电脑安装 .NET 10 Desktop Runtime。
 
 需要生成不依赖预装 .NET Runtime 的自包含版本时：
 
 ```powershell
 .\build-release.ps1 -SelfContained
 ```
+
+生成与 GitHub Release 相同的自包含便携 ZIP、EXE 安装程序和 SHA-256 校验文件：
+
+```powershell
+.\build-distribution.ps1
+```
+
+该命令还需要本机安装 Inno Setup 6；脚本会在找不到编译器时给出明确提示。
+
+校验下载文件：
+
+```powershell
+Get-FileHash .\PerDeviceMixer-0.3.2-preview.1-win-x64-Setup.exe -Algorithm SHA256
+```
+
+将结果与 `SHA256SUMS.txt` 中对应文件的值比较。
 
 ## 使用方法
 
@@ -174,7 +206,7 @@ dotnet run --project src\PerDeviceMixer.App\PerDeviceMixer.App.csproj -c Release
 - 如果某个应用在 Windows 中被固定路由到其他输出设备，它可能不会出现在当前默认设备的合成器中。
 - 应用图标从可执行文件中读取；受权限或打包方式限制时会使用通用图标。
 - 音频格式、增强、空间音效等功能由 Windows 和设备驱动提供，PerDeviceMixer 当前负责打开对应设置入口。
-- 项目仍处于预览阶段，尚未提供安装器和自动更新。
+- 项目仍处于预览阶段，尚未提供自动更新和数字签名。
 
 ## 数据与隐私
 

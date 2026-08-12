@@ -5,6 +5,8 @@ param(
 
     [switch]$SelfContained,
 
+    [switch]$SingleFile,
+
     [string]$OutputDirectory
 )
 
@@ -46,6 +48,14 @@ try {
         "--self-contained", $SelfContained.IsPresent.ToString().ToLowerInvariant(),
         "-o", $OutputDirectory
     )
+
+    if ($SingleFile.IsPresent) {
+        $publishArguments += @(
+            "-p:PublishSingleFile=true",
+            "-p:IncludeNativeLibrariesForSelfExtract=true",
+            "-p:EnableCompressionInSingleFile=true"
+        )
+    }
 
     dotnet @publishArguments
     if ($LASTEXITCODE -ne 0) { throw "dotnet publish failed." }
