@@ -1,0 +1,11 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/PerDeviceMixer.App/PerDeviceMixer.App.csproj" />
+    <Project Path="src/PerDeviceMixer.Audio/PerDeviceMixer.Audio.csproj" />
+    <Project Path="src/PerDeviceMixer.Core/PerDeviceMixer.Core.csproj" />
+    <Project Path="src/PerDeviceMixer.Probe/PerDeviceMixer.Probe.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/PerDeviceMixer.Core.Tests/PerDeviceMixer.Core.Tests.csproj" />
+  </Folder>
+</Solution>

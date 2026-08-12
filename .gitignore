@@ -1,0 +1,17 @@
+bin/
+obj/
+.vs/
+.idea/
+.vscode/
+*.user
+*.suo
+artifacts/
+TestResults/
+coverage/
+.coverage
+*.trx
+*.log
+*.pdb
+*.tmp
+*.corrupt-*
+AGENTS.md
