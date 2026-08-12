@@ -92,6 +92,9 @@ try {
 
     Start-Sleep -Seconds $IdleSeconds
 
+    if ($process.HasExited) {
+        throw "PerDeviceMixer exited before the memory sample was collected."
+    }
     $process.Refresh()
     [pscustomobject]@{
         Executable = $resolvedExecutable
@@ -99,7 +102,7 @@ try {
         IdleSeconds = $IdleSeconds
         WorkingSetMB = [Math]::Round($process.WorkingSet64 / 1MB, 1)
         PrivateMemoryMB = [Math]::Round($process.PrivateMemorySize64 / 1MB, 1)
-        Threads = $process.Threads.Count
+        Threads = @($process.Threads).Count
         Handles = $process.HandleCount
     }
 }

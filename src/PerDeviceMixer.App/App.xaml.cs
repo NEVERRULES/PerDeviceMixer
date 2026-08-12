@@ -41,7 +41,8 @@ public partial class App : System.Windows.Application, IDisposable
         {
             _controller = new ApplicationController(this);
             await _controller.InitializeAsync();
-            if (!startMinimized) _controller.ShowWindow();
+            if (startMinimized) _controller.EnterTrayMode();
+            else _controller.ShowWindow();
         }
         catch (Exception exception)
         {

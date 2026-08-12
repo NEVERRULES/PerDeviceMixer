@@ -61,6 +61,7 @@ internal sealed class TrayIconService : IDisposable
     public event EventHandler? CheckUpdatesRequested;
     public event EventHandler? FeedbackRequested;
     public event EventHandler? ProjectRequested;
+    public event EventHandler? MenuClosed;
 
     public void SetUpdateAvailable(string? version)
     {
@@ -168,6 +169,7 @@ internal sealed class TrayIconService : IDisposable
         menu.Resources.MergedDictionaries.Add(resources);
         menu.Style = resources["TrayContextMenuStyle"] as Style;
         menu.Opened += OnMenuOpened;
+        menu.Closed += OnMenuClosed;
 
         var openItem = CreateItem("打开音量控制", (_, _) => ShowRequested?.Invoke(this, EventArgs.Empty));
         _muteItem = CreateItem("静音", (_, _) => ToggleMasterMute());
@@ -190,6 +192,21 @@ internal sealed class TrayIconService : IDisposable
         menu.Items.Add(new Separator());
         menu.Items.Add(exitItem);
         _menu = menu;
+    }
+
+    private void OnMenuClosed(object? sender, RoutedEventArgs eventArgs)
+    {
+        if (sender is not ContextMenu menu) return;
+        menu.Opened -= OnMenuOpened;
+        menu.Closed -= OnMenuClosed;
+        menu.Items.Clear();
+        menu.Resources.MergedDictionaries.Clear();
+        menu.Resources.Clear();
+        _menu = null;
+        _muteItem = null;
+        _outputDevicesItem = null;
+        _checkUpdatesItem = null;
+        MenuClosed?.Invoke(this, EventArgs.Empty);
     }
 
     private IntPtr WindowProcedure(
@@ -253,9 +270,14 @@ internal sealed class TrayIconService : IDisposable
         _disposed = true;
         if (_menu is not null)
         {
-            _menu.IsOpen = false;
-            _menu.Opened -= OnMenuOpened;
+            var menu = _menu;
             _menu = null;
+            menu.Opened -= OnMenuOpened;
+            menu.Closed -= OnMenuClosed;
+            menu.IsOpen = false;
+            menu.Items.Clear();
+            menu.Resources.MergedDictionaries.Clear();
+            menu.Resources.Clear();
             _muteItem = null;
             _outputDevicesItem = null;
             _checkUpdatesItem = null;

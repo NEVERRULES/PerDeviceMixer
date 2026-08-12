@@ -1,4 +1,5 @@
 using System.Windows;
+using System.Windows.Threading;
 using PerDeviceMixer.Audio;
 using PerDeviceMixer.Core;
 
@@ -13,6 +14,7 @@ internal sealed class ApplicationController : IDisposable
     private MainWindow? _window;
     private ResourceDictionary? _windowResources;
     private readonly Dictionary<AppPage, ResourceDictionary> _pageResources = [];
+    private CancellationTokenSource? _memoryOptimizationCancellation;
     private string? _notifiedUpdateVersion;
     private bool _disposed;
 
@@ -33,6 +35,7 @@ internal sealed class ApplicationController : IDisposable
         _trayIcon.ProjectRequested += OnProjectRequested;
         _trayIcon.FeedbackRequested += OnFeedbackRequested;
         _trayIcon.CheckUpdatesRequested += OnCheckUpdatesRequested;
+        _trayIcon.MenuClosed += OnTrayMenuClosed;
         _updates.StateChanged += OnUpdateStateChanged;
         _updates.Start();
     }
@@ -40,6 +43,7 @@ internal sealed class ApplicationController : IDisposable
     public void ShowWindow()
     {
         if (_disposed || IsExiting) return;
+        CancelBackgroundMemoryOptimization();
         if (_window is not null)
         {
             _window.ActivateWindow();
@@ -50,6 +54,12 @@ internal sealed class ApplicationController : IDisposable
         _window = new MainWindow(this, _engine, _updates);
         _application.MainWindow = _window;
         _window.Show();
+    }
+
+    public void EnterTrayMode()
+    {
+        if (_disposed || IsExiting || _window is not null) return;
+        ScheduleBackgroundMemoryOptimization();
     }
 
     public void BeginExitFromWindow() => IsExiting = true;
@@ -100,6 +110,7 @@ internal sealed class ApplicationController : IDisposable
     public void RequestExit()
     {
         if (_disposed || IsExiting) return;
+        CancelBackgroundMemoryOptimization();
         IsExiting = true;
         if (_window is not null)
         {
@@ -117,7 +128,14 @@ internal sealed class ApplicationController : IDisposable
         if (ReferenceEquals(_application.MainWindow, window)) _application.MainWindow = null;
         _window = null;
         ReleaseWindowResources();
-        if (IsExiting) _application.Shutdown();
+        if (IsExiting)
+        {
+            _application.Shutdown();
+        }
+        else
+        {
+            ScheduleBackgroundMemoryOptimization();
+        }
     }
 
     private void OnShowRequested(object? sender, EventArgs eventArgs) => ShowWindow();
@@ -127,6 +145,9 @@ internal sealed class ApplicationController : IDisposable
     private static void OnProjectRequested(object? sender, EventArgs eventArgs) => OpenProject();
 
     private void OnFeedbackRequested(object? sender, EventArgs eventArgs) => ShowFeedback();
+
+    private void OnTrayMenuClosed(object? sender, EventArgs eventArgs) =>
+        ScheduleBackgroundMemoryOptimization();
 
     private async void OnCheckUpdatesRequested(object? sender, EventArgs eventArgs)
     {
@@ -148,8 +169,82 @@ internal sealed class ApplicationController : IDisposable
                 _notifiedUpdateVersion = release.Version.ToString();
                 _trayIcon?.ShowUpdateNotification(_notifiedUpdateVersion);
             }
+
+            if (_window is null &&
+                !eventArgs.State.IsChecking &&
+                !eventArgs.State.IsDownloading)
+            {
+                ScheduleBackgroundMemoryOptimization();
+            }
         });
     }
+
+    private void ScheduleBackgroundMemoryOptimization()
+    {
+        if (_disposed || IsExiting || HasVisibleWindow()) return;
+        var cancellation = new CancellationTokenSource();
+        var previous = Interlocked.Exchange(ref _memoryOptimizationCancellation, cancellation);
+        if (previous is not null)
+        {
+            try
+            {
+                previous.Cancel();
+            }
+            catch (ObjectDisposedException)
+            {
+            }
+        }
+
+        _ = OptimizeBackgroundMemoryAsync(cancellation);
+    }
+
+    private async Task OptimizeBackgroundMemoryAsync(CancellationTokenSource cancellation)
+    {
+        try
+        {
+            await Task.Delay(TimeSpan.FromSeconds(2), cancellation.Token).ConfigureAwait(false);
+            await _application.Dispatcher.InvokeAsync(
+                () =>
+                {
+                    if (!cancellation.IsCancellationRequested &&
+                        !_disposed &&
+                        !IsExiting &&
+                        !HasVisibleWindow())
+                    {
+                        BackgroundMemoryOptimizer.TrimCurrentProcess();
+                    }
+                },
+                DispatcherPriority.ApplicationIdle,
+                cancellation.Token);
+        }
+        catch (OperationCanceledException) when (cancellation.IsCancellationRequested)
+        {
+        }
+        finally
+        {
+            _ = Interlocked.CompareExchange(
+                ref _memoryOptimizationCancellation,
+                null,
+                cancellation);
+            cancellation.Dispose();
+        }
+    }
+
+    private void CancelBackgroundMemoryOptimization()
+    {
+        var cancellation = Interlocked.Exchange(ref _memoryOptimizationCancellation, null);
+        if (cancellation is null) return;
+        try
+        {
+            cancellation.Cancel();
+        }
+        catch (ObjectDisposedException)
+        {
+        }
+    }
+
+    private bool HasVisibleWindow() =>
+        _window is not null || _application.Windows.Cast<Window>().Any(window => window.IsVisible);
 
     public static void OpenProject() => OpenSupportLink(ProjectLinks.Project);
 
@@ -185,7 +280,14 @@ internal sealed class ApplicationController : IDisposable
         {
             Owner = _window
         };
-        dialog.ShowDialog();
+        try
+        {
+            dialog.ShowDialog();
+        }
+        finally
+        {
+            ScheduleBackgroundMemoryOptimization();
+        }
     }
 
     public async Task DownloadAndInstallAvailableUpdateAsync(CancellationToken cancellationToken = default)
@@ -238,6 +340,7 @@ internal sealed class ApplicationController : IDisposable
     {
         if (_disposed) return;
         _disposed = true;
+        CancelBackgroundMemoryOptimization();
         if (_trayIcon is not null)
         {
             _trayIcon.ShowRequested -= OnShowRequested;
@@ -245,6 +348,7 @@ internal sealed class ApplicationController : IDisposable
             _trayIcon.ProjectRequested -= OnProjectRequested;
             _trayIcon.FeedbackRequested -= OnFeedbackRequested;
             _trayIcon.CheckUpdatesRequested -= OnCheckUpdatesRequested;
+            _trayIcon.MenuClosed -= OnTrayMenuClosed;
             _trayIcon.Dispose();
             _trayIcon = null;
         }

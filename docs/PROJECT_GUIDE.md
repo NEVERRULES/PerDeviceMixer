@@ -121,6 +121,8 @@ PerDeviceMixer.App.Tests  -> 更新、版本和下载校验测试
 - `ApplicationController` 在应用级持有 `MixerEngine`、托盘和更新调度器；
 - 主窗口和 ViewModel 按需创建，关闭到托盘时销毁，页面通过 DataTemplate 只加载当前导航项；
 - 应用图标只在窗口生命周期内缓存，窗口销毁时释放；
+- 进入纯托盘状态约 2 秒后执行一次托管堆整理和 Windows 工作集回收；重新打开窗口、显示反馈对话框或更新任务运行时会取消或推迟回收；
+- 回收只在进入托盘、托盘临时界面关闭和后台更新结束等状态边界触发，不做周期性 GC；它降低的是驻留工作集，私有提交内存不会等量下降，重新打开窗口需要重新调入页面；
 - 使用 Windows Shell 托盘接口和 WPF `ContextMenu`，Explorer 重启后重新注册图标；
 - 管理单实例、当前用户启动项、GitHub 更新、安装交接和支持链接；
 - 通过 `ms-settings:` 打开 Windows 提供的高级声音页面。
