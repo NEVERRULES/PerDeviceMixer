@@ -99,6 +99,13 @@ public sealed class MixerEngine : IDisposable
         var clamped = Clamp(volume);
         audio.SetMasterVolume(id, clamped, muted);
         UpdateProfileFromLocalChange(id, null, clamped, muted);
+        MixerChanged?.Invoke(
+            this,
+            new AudioStateChangedEventArgs(
+                AudioChangeKind.MasterVolume,
+                id,
+                volume: clamped,
+                isMuted: muted));
     }
 
     public void SetApplicationVolume(string applicationKey, float volume, bool? muted = null)

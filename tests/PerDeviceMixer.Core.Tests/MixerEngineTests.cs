@@ -101,6 +101,26 @@ public sealed class MixerEngineTests
     }
 
     [Fact]
+    public async Task LocalMasterChangeRaisesMixerChangedForTrayStatus()
+    {
+        using var directory = new TemporaryDirectory();
+        var store = new JsonProfileStore(Path.Combine(directory.Path, "profiles.json"));
+        var audio = new FakeAudioService(CreateSnapshot("device-new", 0.42f, 0.67f));
+        using var engine = new MixerEngine(audio, store);
+        await engine.InitializeAsync();
+        AudioStateChangedEventArgs? observed = null;
+        engine.MixerChanged += (_, eventArgs) => observed = eventArgs;
+
+        engine.SetMasterVolume(0.55f, true);
+
+        Assert.NotNull(observed);
+        Assert.Equal(AudioChangeKind.MasterVolume, observed.Kind);
+        Assert.Equal("device-new", observed.DeviceId);
+        Assert.Equal(0.55f, observed.Volume);
+        Assert.True(observed.IsMuted);
+    }
+
+    [Fact]
     public async Task ExternalMasterNotificationUpdatesProfileWithoutReenumeratingSessions()
     {
         using var directory = new TemporaryDirectory();

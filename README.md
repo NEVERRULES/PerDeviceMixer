@@ -8,7 +8,7 @@
   按输出设备自动记忆并恢复主音量、应用音量和静音状态的 Windows 本地音量管理器。
 </p>
 
-> 当前源码版本：`0.4.0-preview.1`；最新公开版本：`0.4.0-preview.1`。项目仍处于预览阶段，建议首次使用时保留 Windows 原生声音设置作为备用入口。
+> 当前源码版本：`0.4.0-preview.2`；最新公开版本：`0.4.0-preview.1`。项目仍处于预览阶段，建议首次使用时保留 Windows 原生声音设置作为备用入口。
 
 ## 项目解决什么问题
 
@@ -55,6 +55,7 @@ PerDeviceMixer 将输出设备本身视为配置。你正常调整音量后，�
 
 - 关闭到托盘后销毁完整窗口和页面树，仅保留音频监听、托盘、自动保存和更新调度；空闲约 2 秒后会执行一次内存整理并归还工作集；
 - 使用与主界面一致的深色 WPF 托盘菜单，可打开窗口、切换主静音、切换输出设备、检查更新、反馈问题、访问项目主页或退出；
+- 鼠标悬停托盘图标时显示当前输出设备、主音量和静音状态，并随设备或音量变化自动刷新；
 - 单实例运行：重复启动只会唤醒已有窗口；
 - 可选择点击关闭按钮后直接退出，或最小化到托盘；
 - 可选择登录 Windows 后自动在托盘中启动；
@@ -132,7 +133,7 @@ dotnet run --project src\PerDeviceMixer.App\PerDeviceMixer.App.csproj -c Release
 校验下载文件：
 
 ```powershell
-Get-FileHash .\PerDeviceMixer-0.4.0-preview.1-win-x64-Setup.exe -Algorithm SHA256
+Get-FileHash .\PerDeviceMixer-0.4.0-preview.2-win-x64-Setup.exe -Algorithm SHA256
 ```
 
 将结果与 `SHA256SUMS.txt` 中对应文件的值比较。

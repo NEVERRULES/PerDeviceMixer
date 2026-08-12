@@ -25,8 +25,10 @@ internal sealed class TrayIconService : IDisposable
     private const uint NotifyIconIcon = 0x00000002;
     private const uint NotifyIconTip = 0x00000004;
     private const uint NotifyIconInfo = 0x00000010;
+    private const uint NotifyIconShowTip = 0x00000080;
     private const uint NotifyIconVersion4 = 4;
     private const uint NotifyIconInfoFlag = 0x00000001;
+    private const int MaximumToolTipLength = 127;
 
     private readonly MixerEngine _engine;
     private readonly HwndSource _messageWindow;
@@ -36,7 +38,9 @@ internal sealed class TrayIconService : IDisposable
     private MenuItem? _outputDevicesItem;
     private MenuItem? _checkUpdatesItem;
     private string? _updateVersion;
+    private string _toolTip = "PerDeviceMixer";
     private Icon? _icon;
+    private int _toolTipRefreshPending;
     private bool _disposed;
 
     public TrayIconService(MixerEngine engine)
@@ -53,6 +57,8 @@ internal sealed class TrayIconService : IDisposable
         _icon = Icon.ExtractAssociatedIcon(Environment.ProcessPath ?? string.Empty)
             ?? (Icon)SystemIcons.Application.Clone();
 
+        _engine.MixerChanged += OnMixerChanged;
+        _toolTip = GetCurrentToolTip();
         AddIcon();
     }
 
@@ -136,6 +142,84 @@ internal sealed class TrayIconService : IDisposable
     private void OnOutputDeviceClick(object sender, RoutedEventArgs eventArgs)
     {
         if (sender is MenuItem { Tag: string deviceId }) _engine.SetDefaultOutputDevice(deviceId);
+    }
+
+    private void OnMixerChanged(object? sender, AudioStateChangedEventArgs eventArgs)
+    {
+        if (eventArgs.Kind is not (
+                AudioChangeKind.DefaultDevice or
+                AudioChangeKind.MasterVolume or
+                AudioChangeKind.DeviceCollection)) return;
+
+        ScheduleToolTipRefresh();
+    }
+
+    private void ScheduleToolTipRefresh()
+    {
+        if (_disposed || Interlocked.Exchange(ref _toolTipRefreshPending, 1) != 0) return;
+        var dispatcher = _messageWindow.Dispatcher;
+        if (dispatcher.HasShutdownStarted)
+        {
+            Interlocked.Exchange(ref _toolTipRefreshPending, 0);
+            return;
+        }
+
+        _ = dispatcher.BeginInvoke(
+            DispatcherPriority.Background,
+            new Action(() =>
+            {
+                Interlocked.Exchange(ref _toolTipRefreshPending, 0);
+                RefreshToolTip();
+            }));
+    }
+
+    private void RefreshToolTip()
+    {
+        if (_disposed) return;
+        var toolTip = GetCurrentToolTip();
+        if (string.Equals(_toolTip, toolTip, StringComparison.Ordinal)) return;
+
+        _toolTip = toolTip;
+        var data = CreateNotifyIconData();
+        data.Flags = NotifyIconTip | NotifyIconShowTip;
+        _ = ShellNotifyIcon(NotifyIconModify, ref data);
+    }
+
+    private string GetCurrentToolTip()
+    {
+        try
+        {
+            return FormatToolTip(_engine.GetCurrentSnapshot());
+        }
+        catch
+        {
+            return _toolTip;
+        }
+    }
+
+    internal static string FormatToolTip(MixerSnapshot? snapshot)
+    {
+        if (snapshot is null) return "PerDeviceMixer\n暂无可用输出设备";
+
+        var deviceName = snapshot.Endpoint.Name
+            .Replace('\r', ' ')
+            .Replace('\n', ' ')
+            .Trim();
+        if (string.IsNullOrWhiteSpace(deviceName)) deviceName = "未知输出设备";
+
+        var volume = (int)Math.Round(
+            Math.Clamp(snapshot.Endpoint.MasterVolume, 0f, 1f) * 100d,
+            MidpointRounding.AwayFromZero);
+        var status = snapshot.Endpoint.IsMuted
+            ? $"主音量 {volume}% · 已静音"
+            : $"主音量 {volume}%";
+        var maximumDeviceNameLength = MaximumToolTipLength - status.Length - 1;
+        if (deviceName.Length > maximumDeviceNameLength)
+        {
+            deviceName = deviceName[..(maximumDeviceNameLength - 1)] + "…";
+        }
+
+        return $"{deviceName}\n{status}";
     }
 
     private void ToggleMasterMute()
@@ -246,7 +330,7 @@ internal sealed class TrayIconService : IDisposable
     {
         if (_disposed || _icon is null) return;
         var data = CreateNotifyIconData();
-        data.Flags = NotifyIconMessage | NotifyIconIcon | NotifyIconTip;
+        data.Flags = NotifyIconMessage | NotifyIconIcon | NotifyIconTip | NotifyIconShowTip;
         if (!ShellNotifyIcon(NotifyIconAdd, ref data)) return;
         data.TimeoutOrVersion = NotifyIconVersion4;
         _ = ShellNotifyIcon(NotifyIconSetVersion, ref data);
@@ -259,7 +343,7 @@ internal sealed class TrayIconService : IDisposable
         Id = 1,
         CallbackMessage = CallbackMessage,
         IconHandle = _icon?.Handle ?? IntPtr.Zero,
-        Tip = "PerDeviceMixer",
+        Tip = _toolTip,
         Info = string.Empty,
         InfoTitle = string.Empty
     };
@@ -268,6 +352,7 @@ internal sealed class TrayIconService : IDisposable
     {
         if (_disposed) return;
         _disposed = true;
+        _engine.MixerChanged -= OnMixerChanged;
         if (_menu is not null)
         {
             var menu = _menu;
