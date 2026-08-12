@@ -5,7 +5,7 @@ namespace PerDeviceMixer.App.Tests;
 public sealed class LazyPageResourceTests
 {
     [Fact]
-    public void PageResourceDictionariesLoadAndInstantiateOnDemand()
+    public void PageResourceDictionariesLoadInstantiateAndLayoutOnDemand()
     {
         Exception? failure = null;
         var thread = new Thread(() =>
@@ -21,8 +21,12 @@ public sealed class LazyPageResourceTests
 
                 Assert.IsAssignableFrom<FrameworkElement>(
                     Assert.IsType<DataTemplate>(devices["DevicesPageTemplate"]).LoadContent());
-                Assert.IsAssignableFrom<FrameworkElement>(
+                var settingsPage = Assert.IsAssignableFrom<FrameworkElement>(
                     Assert.IsType<DataTemplate>(settings["SettingsPageTemplate"]).LoadContent());
+                settingsPage.DataContext = new SettingsBindingSource();
+                settingsPage.Measure(new Size(1000, 2000));
+                settingsPage.Arrange(new Rect(settingsPage.DesiredSize));
+                settingsPage.UpdateLayout();
                 application.Shutdown();
             }
             catch (Exception exception)
@@ -40,4 +44,11 @@ public sealed class LazyPageResourceTests
     {
         Source = new Uri($"/PerDeviceMixer.App;component/{name}", UriKind.Relative)
     };
+
+    private sealed class SettingsBindingSource
+    {
+        private readonly int _progress = 50;
+
+        public int UpdateDownloadProgress => _progress;
+    }
 }
