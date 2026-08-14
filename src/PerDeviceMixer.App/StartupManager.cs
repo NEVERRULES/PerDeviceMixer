@@ -1,4 +1,5 @@
 using Microsoft.Win32;
+using System.IO;
 
 namespace PerDeviceMixer.App;
 
@@ -12,7 +13,7 @@ internal static class StartupManager
         get
         {
             using var key = Registry.CurrentUser.OpenSubKey(RunKeyPath, writable: false);
-            return key?.GetValue(ValueName) is string value && !string.IsNullOrWhiteSpace(value);
+            return IsCurrentExecutableCommand(key?.GetValue(ValueName) as string, Environment.ProcessPath);
         }
     }
 
@@ -32,5 +33,33 @@ internal static class StartupManager
         }
 
         key.SetValue(ValueName, $"\"{executablePath}\" --minimized", RegistryValueKind.String);
+    }
+
+    internal static bool IsCurrentExecutableCommand(string? command, string? executablePath)
+    {
+        if (string.IsNullOrWhiteSpace(command) || string.IsNullOrWhiteSpace(executablePath)) return false;
+        var trimmed = command.Trim();
+        var commandPath = trimmed.StartsWith('"')
+            ? ExtractQuotedExecutablePath(trimmed)
+            : trimmed.Split(' ', 2, StringSplitOptions.RemoveEmptyEntries)[0];
+        if (string.IsNullOrWhiteSpace(commandPath)) return false;
+
+        try
+        {
+            return string.Equals(
+                Path.GetFullPath(commandPath),
+                Path.GetFullPath(executablePath),
+                StringComparison.OrdinalIgnoreCase);
+        }
+        catch (Exception exception) when (exception is ArgumentException or NotSupportedException or PathTooLongException)
+        {
+            return false;
+        }
+    }
+
+    private static string? ExtractQuotedExecutablePath(string command)
+    {
+        var closingQuote = command.IndexOf('"', 1);
+        return closingQuote > 1 ? command[1..closingQuote] : null;
     }
 }

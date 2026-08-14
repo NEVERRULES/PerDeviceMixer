@@ -223,6 +223,59 @@ public sealed class MixerEngineTests
         Assert.True(loaded.Devices["device-new"].MasterMuted);
     }
 
+    [Fact]
+    public async Task AudioEventsAreProcessedInArrivalOrder()
+    {
+        using var directory = new TemporaryDirectory();
+        var store = new JsonProfileStore(Path.Combine(directory.Path, "profiles.json"));
+        var audio = new FakeAudioService(CreateSnapshot("device-new", 0.42f, 0.67f));
+        using var engine = new MixerEngine(audio, store);
+        await engine.InitializeAsync();
+        var observedVolumes = new List<float>();
+        var completed = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        engine.MixerChanged += (_, eventArgs) =>
+        {
+            if (eventArgs.Kind != AudioChangeKind.MasterVolume || !eventArgs.Volume.HasValue) return;
+            observedVolumes.Add(eventArgs.Volume.Value);
+            if (observedVolumes.Count == 3) completed.TrySetResult();
+        };
+
+        audio.RaiseMasterVolumeChanged(0.11f, false);
+        audio.RaiseMasterVolumeChanged(0.22f, false);
+        audio.RaiseMasterVolumeChanged(0.33f, true);
+
+        await completed.Task.WaitAsync(TimeSpan.FromSeconds(3));
+
+        Assert.Equal([0.11f, 0.22f, 0.33f], observedVolumes);
+        Assert.Equal(0.33f, engine.Profiles.Devices["device-new"].MasterVolume);
+        Assert.True(engine.Profiles.Devices["device-new"].MasterMuted);
+    }
+
+    [Fact]
+    public async Task EnabledAudioDiagnosticsRecordOnlyHashedEventIdentity()
+    {
+        using var directory = new TemporaryDirectory();
+        var store = new JsonProfileStore(Path.Combine(directory.Path, "profiles.json"));
+        var audio = new FakeAudioService(CreateSnapshot("device-new", 0.42f, 0.67f));
+        var diagnostics = new CollectingDiagnosticSink();
+        using var engine = new MixerEngine(audio, store, diagnostics);
+        await engine.InitializeAsync();
+        engine.UpdateSettings(settings => settings.AudioDiagnosticsEnabled = true);
+
+        audio.RaiseMasterVolumeChanged(0.73f, true);
+        await WaitUntilAsync(() => Task.FromResult(diagnostics.Snapshot().Any(entry =>
+            entry.Kind == AudioChangeKind.MasterVolume && entry.Stage == "completed")));
+
+        var entry = Assert.Single(
+            diagnostics.Snapshot(),
+            item => item.Kind == AudioChangeKind.MasterVolume && item.Stage == "completed");
+        Assert.NotNull(entry.DeviceToken);
+        Assert.Equal(12, entry.DeviceToken!.Length);
+        Assert.DoesNotContain("device-new", entry.DeviceToken, StringComparison.OrdinalIgnoreCase);
+        Assert.Null(entry.ApplicationToken);
+    }
+
     private static async Task WaitUntilAsync(Func<Task<bool>> condition)
     {
         var timeout = DateTime.UtcNow.AddSeconds(3);
@@ -287,6 +340,21 @@ public sealed class MixerEngineTests
         {
             Save(value);
             return Task.CompletedTask;
+        }
+    }
+
+    private sealed class CollectingDiagnosticSink : IAudioDiagnosticSink
+    {
+        public List<AudioDiagnosticEntry> Entries { get; } = [];
+
+        public void Write(AudioDiagnosticEntry entry)
+        {
+            lock (Entries) Entries.Add(entry);
+        }
+
+        public AudioDiagnosticEntry[] Snapshot()
+        {
+            lock (Entries) return Entries.ToArray();
         }
     }
 

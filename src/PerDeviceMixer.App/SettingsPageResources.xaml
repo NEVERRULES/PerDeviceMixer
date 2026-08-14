@@ -169,6 +169,30 @@
             </StackPanel>
         </Border>
 
+        <Border Margin="0,16,0,0"
+                Padding="16,14"
+                CornerRadius="10"
+                Background="{StaticResource SurfaceBrush}"
+                BorderBrush="{StaticResource DividerBrush}"
+                BorderThickness="1">
+            <Grid>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="Auto" />
+                </Grid.ColumnDefinitions>
+                <StackPanel>
+                    <TextBlock FontWeight="SemiBold" Text="本地音频诊断" />
+                    <TextBlock Margin="0,3,0,0"
+                               Foreground="{StaticResource MutedBrush}"
+                               FontSize="12"
+                               Text="仅在本机记录事件类型和匿名标识，用于排查蓝牙、HDMI 和会话切换问题" />
+                </StackPanel>
+                <CheckBox Grid.Column="1"
+                          Style="{StaticResource SwitchStyle}"
+                          IsChecked="{Binding AudioDiagnosticsEnabled}" />
+            </Grid>
+        </Border>
+
         <TextBlock Margin="0,22,0,10" FontSize="15" FontWeight="SemiBold" Text="更新与支持" />
         <Border Padding="16"
                 CornerRadius="10"

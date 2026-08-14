@@ -8,7 +8,7 @@
   按输出设备自动记忆并恢复主音量、应用音量和静音状态的 Windows 本地音量管理器。
 </p>
 
-> 当前源码版本：`0.4.0-preview.2`；最新公开版本：`0.4.0-preview.1`。项目仍处于预览阶段，建议首次使用时保留 Windows 原生声音设置作为备用入口。
+> 当前源码版本：`0.4.0-preview.3`；最新公开版本：`0.4.0-preview.1`。项目仍处于预览阶段，建议首次使用时保留 Windows 原生声音设置作为备用入口。
 
 ## 项目解决什么问题
 
@@ -60,6 +60,7 @@ PerDeviceMixer 将输出设备本身视为配置。你正常调整音量后，�
 - 可选择点击关闭按钮后直接退出，或最小化到托盘；
 - 可选择登录 Windows 后自动在托盘中启动；
 - 可调整自动学习、自动恢复、新会话恢复、静音状态保存和保存延迟；
+- 可选开启本地音频诊断；日志仅保留事件类型、匿名端点/应用标识和异常类型，用于排查设备或会话切换问题；
 - 所有设置和音量变化都会自动异步保存，设置页会显示保存状态；退出和更新安装交接前会刷新剩余更改；
 - 可手动检查 GitHub Releases 更新，也可设置每 6 小时、1 天、3 天或 7 天自动检查；
 - 安装版可校验 `SHA256SUMS.txt` 后打开可见安装向导，便携版会打开 Release 下载页；
@@ -133,7 +134,7 @@ dotnet run --project src\PerDeviceMixer.App\PerDeviceMixer.App.csproj -c Release
 校验下载文件：
 
 ```powershell
-Get-FileHash .\PerDeviceMixer-0.4.0-preview.2-win-x64-Setup.exe -Algorithm SHA256
+Get-FileHash .\PerDeviceMixer-0.4.0-preview.3-win-x64-Setup.exe -Algorithm SHA256
 ```
 
 将结果与 `SHA256SUMS.txt` 中对应文件的值比较。

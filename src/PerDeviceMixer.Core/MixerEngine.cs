@@ -1,4 +1,6 @@
 using System.Threading.Channels;
+using System.Security.Cryptography;
+using System.Text;
 
 namespace PerDeviceMixer.Core;
 
@@ -7,6 +9,16 @@ public sealed class MixerEngine : IDisposable
     private readonly IAudioService audio;
     private readonly IProfileStore profileStore;
     private readonly SemaphoreSlim _operationLock = new(1, 1);
+    private readonly IAudioDiagnosticSink? _diagnostics;
+    private readonly Channel<AudioStateChangedEventArgs> _audioEvents =
+        Channel.CreateBounded<AudioStateChangedEventArgs>(new BoundedChannelOptions(256)
+        {
+            FullMode = BoundedChannelFullMode.Wait,
+            SingleReader = true,
+            SingleWriter = false
+        });
+    private readonly CancellationTokenSource _audioEventWorkerShutdown = new();
+    private readonly Task _audioEventWorker;
     private readonly Channel<bool> _saveRequests = Channel.CreateBounded<bool>(
         new BoundedChannelOptions(1)
         {
@@ -21,10 +33,15 @@ public sealed class MixerEngine : IDisposable
     private bool _isRestoring;
     private bool _disposed;
 
-    public MixerEngine(IAudioService audio, IProfileStore profileStore)
+    public MixerEngine(
+        IAudioService audio,
+        IProfileStore profileStore,
+        IAudioDiagnosticSink? diagnostics = null)
     {
         this.audio = audio;
         this.profileStore = profileStore;
+        _diagnostics = diagnostics;
+        _audioEventWorker = Task.Run(RunAudioEventWorkerAsync);
         _saveWorker = Task.Run(RunSaveWorkerAsync);
     }
 
@@ -33,6 +50,33 @@ public sealed class MixerEngine : IDisposable
 
     public MixerProfileDocument Profiles => _document;
     public string ProfilePath => profileStore.FilePath;
+
+    public MixerSettings GetSettingsSnapshot()
+    {
+        _operationLock.Wait();
+        try
+        {
+            return new MixerSettings
+            {
+                AutoLearn = _document.Settings.AutoLearn,
+                AutoRestore = _document.Settings.AutoRestore,
+                RestoreNewSessions = _document.Settings.RestoreNewSessions,
+                SaveMuteState = _document.Settings.SaveMuteState,
+                AudioDiagnosticsEnabled = _document.Settings.AudioDiagnosticsEnabled,
+                SaveDebounceMilliseconds = _document.Settings.SaveDebounceMilliseconds,
+                StartWithWindows = _document.Settings.StartWithWindows,
+                CloseBehavior = _document.Settings.CloseBehavior,
+                AutomaticUpdateChecks = _document.Settings.AutomaticUpdateChecks,
+                UpdateCheckIntervalHours = _document.Settings.UpdateCheckIntervalHours,
+                LastSuccessfulUpdateCheckUtc = _document.Settings.LastSuccessfulUpdateCheckUtc,
+                LastUpdateAttemptUtc = _document.Settings.LastUpdateAttemptUtc
+            };
+        }
+        finally
+        {
+            _operationLock.Release();
+        }
+    }
 
     public async Task InitializeAsync(CancellationToken cancellationToken = default)
     {
@@ -250,7 +294,37 @@ public sealed class MixerEngine : IDisposable
 
     private void OnAudioStateChanged(object? sender, AudioStateChangedEventArgs args)
     {
-        _ = HandleAudioStateChangedAsync(args);
+        if (_disposed) return;
+        if (!_audioEvents.Writer.TryWrite(args))
+        {
+            RecordDiagnostic(args, "queue-full");
+        }
+    }
+
+    private async Task RunAudioEventWorkerAsync()
+    {
+        var reader = _audioEvents.Reader;
+        var cancellationToken = _audioEventWorkerShutdown.Token;
+        try
+        {
+            while (await reader.WaitToReadAsync(cancellationToken).ConfigureAwait(false))
+            {
+                while (reader.TryRead(out var args))
+                {
+                    await HandleAudioStateChangedAsync(args).ConfigureAwait(false);
+                }
+            }
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+        }
+        catch (Exception exception)
+        {
+            RecordDiagnostic(
+                new AudioStateChangedEventArgs(AudioChangeKind.DeviceCollection),
+                "worker-failed",
+                exception);
+        }
     }
 
     private async Task HandleAudioStateChangedAsync(AudioStateChangedEventArgs args)
@@ -259,6 +333,7 @@ public sealed class MixerEngine : IDisposable
 
         try
         {
+            RecordDiagnostic(args, "received");
             if (args.Kind == AudioChangeKind.DefaultDevice)
             {
                 var snapshot = audio.GetDefaultMixerSnapshot();
@@ -279,6 +354,7 @@ public sealed class MixerEngine : IDisposable
                 }
 
                 MixerChanged?.Invoke(this, args);
+                RecordDiagnostic(args, "completed");
                 return;
             }
 
@@ -298,6 +374,7 @@ public sealed class MixerEngine : IDisposable
                 }
 
                 MixerChanged?.Invoke(this, args);
+                RecordDiagnostic(args, "completed");
                 return;
             }
 
@@ -312,12 +389,36 @@ public sealed class MixerEngine : IDisposable
             }
 
             MixerChanged?.Invoke(this, args);
+            RecordDiagnostic(args, "completed");
         }
-        catch
+        catch (Exception exception)
         {
             // A transient endpoint disappearing during a Bluetooth/HDMI switch is expected.
-            // The next Core Audio notification refreshes the state.
+            // Record the failure when explicitly enabled; the next notification can refresh the state.
+            RecordDiagnostic(args, "failed", exception);
         }
+    }
+
+    private void RecordDiagnostic(
+        AudioStateChangedEventArgs args,
+        string stage,
+        Exception? exception = null)
+    {
+        if (_diagnostics is null || !_document.Settings.AudioDiagnosticsEnabled) return;
+        _diagnostics.Write(new AudioDiagnosticEntry(
+            DateTimeOffset.UtcNow,
+            args.Kind,
+            stage,
+            ToDiagnosticToken(args.DeviceId),
+            ToDiagnosticToken(args.ApplicationKey),
+            exception?.GetType().Name));
+    }
+
+    private static string? ToDiagnosticToken(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value)) return null;
+        var hash = SHA256.HashData(Encoding.UTF8.GetBytes(value));
+        return Convert.ToHexStringLower(hash)[..12];
     }
 
     private async Task UpdateProfileFromNotificationAsync(AudioStateChangedEventArgs args)
@@ -545,7 +646,16 @@ public sealed class MixerEngine : IDisposable
         if (_disposed) return;
         _disposed = true;
         audio.StateChanged -= OnAudioStateChanged;
+        _audioEvents.Writer.TryComplete();
         _saveRequests.Writer.TryComplete();
+        try
+        {
+            _audioEventWorker.Wait(TimeSpan.FromSeconds(2));
+        }
+        catch (AggregateException)
+        {
+        }
+        _audioEventWorkerShutdown.Cancel();
         _saveWorkerShutdown.Cancel();
         try
         {
@@ -554,6 +664,7 @@ public sealed class MixerEngine : IDisposable
         catch (AggregateException)
         {
         }
+        _audioEventWorkerShutdown.Dispose();
         _saveWorkerShutdown.Dispose();
         audio.Dispose();
     }

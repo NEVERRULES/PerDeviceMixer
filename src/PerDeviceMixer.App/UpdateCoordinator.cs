@@ -193,7 +193,7 @@ internal sealed class UpdateCoordinator : IDisposable
                 .ConfigureAwait(false);
             while (!cancellationToken.IsCancellationRequested)
             {
-                var settings = _engine.Profiles.Settings;
+                var settings = _engine.GetSettingsSnapshot();
                 if (!settings.AutomaticUpdateChecks)
                 {
                     await WaitForSettingsOrDelayAsync(TimeSpan.FromHours(1), cancellationToken)

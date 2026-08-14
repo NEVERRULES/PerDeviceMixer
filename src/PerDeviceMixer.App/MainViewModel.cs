@@ -33,6 +33,7 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
     private bool _autoRestore = true;
     private bool _restoreNewSessions = true;
     private bool _saveMuteState = true;
+    private bool _audioDiagnosticsEnabled;
     private double _saveDebounceMilliseconds = 500;
     private bool _startWithWindows;
     private bool _minimizeToTrayOnClose = true;
@@ -236,6 +237,16 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
         }
     }
 
+    public bool AudioDiagnosticsEnabled
+    {
+        get => _audioDiagnosticsEnabled;
+        set
+        {
+            if (!SetField(ref _audioDiagnosticsEnabled, value)) return;
+            SaveSetting(settings => settings.AudioDiagnosticsEnabled = value);
+        }
+    }
+
     public double SaveDebounceMilliseconds
     {
         get => _saveDebounceMilliseconds;
@@ -373,6 +384,7 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
         _autoRestore = settings.AutoRestore;
         _restoreNewSessions = settings.RestoreNewSessions;
         _saveMuteState = settings.SaveMuteState;
+        _audioDiagnosticsEnabled = settings.AudioDiagnosticsEnabled;
         _saveDebounceMilliseconds = settings.SaveDebounceMilliseconds;
         _startWithWindows = StartupManager.IsEnabled;
         _minimizeToTrayOnClose = settings.CloseBehavior == CloseBehavior.MinimizeToTray;
@@ -385,6 +397,7 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
         OnPropertyChanged(nameof(AutoRestore));
         OnPropertyChanged(nameof(RestoreNewSessions));
         OnPropertyChanged(nameof(SaveMuteState));
+        OnPropertyChanged(nameof(AudioDiagnosticsEnabled));
         OnPropertyChanged(nameof(SaveDebounceMilliseconds));
         OnPropertyChanged(nameof(StartWithWindows));
         OnPropertyChanged(nameof(MinimizeToTrayOnClose));

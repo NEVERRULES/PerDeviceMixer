@@ -8,7 +8,10 @@ namespace PerDeviceMixer.App;
 internal sealed class ApplicationController : IDisposable
 {
     private readonly App _application;
-    private readonly MixerEngine _engine = new(new CoreAudioService(), new JsonProfileStore());
+    private readonly MixerEngine _engine = new(
+        new CoreAudioService(),
+        new JsonProfileStore(),
+        new LocalAudioDiagnosticLog());
     private readonly UpdateCoordinator _updates;
     private TrayIconService? _trayIcon;
     private MainWindow? _window;

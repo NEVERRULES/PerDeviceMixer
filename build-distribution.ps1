@@ -1,6 +1,6 @@
 [CmdletBinding()]
 param(
-    [string]$Version = "0.4.0-preview.2",
+    [string]$Version,
 
     [ValidateSet("win-x64")]
     [string]$Runtime = "win-x64"
@@ -10,6 +10,18 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
 $repositoryRoot = $PSScriptRoot
+$versionPropertiesPath = Join-Path $repositoryRoot "Directory.Build.props"
+$versionProperties = [xml](Get-Content -LiteralPath $versionPropertiesPath -Raw)
+$sourceVersion = [string]$versionProperties.Project.PropertyGroup.Version
+if ([string]::IsNullOrWhiteSpace($sourceVersion)) {
+    throw "Directory.Build.props does not define the application Version."
+}
+if ([string]::IsNullOrWhiteSpace($Version)) {
+    $Version = $sourceVersion
+}
+elseif (-not [string]::Equals($Version, $sourceVersion, [StringComparison]::Ordinal)) {
+    throw "Requested distribution version '$Version' does not match Directory.Build.props version '$sourceVersion'."
+}
 $artifactRoot = Join-Path $repositoryRoot "artifacts\release\$Version"
 $publishDirectory = Join-Path $artifactRoot "publish"
 $outputDirectory = Join-Path $artifactRoot "assets"

@@ -1,17 +1,17 @@
 #ifndef AppVersion
-  #define AppVersion "0.4.0-preview.2"
+  #define AppVersion "0.4.0-preview.3"
 #endif
 #ifndef VersionInfoVersion
-  #define VersionInfoVersion "0.4.0.1"
+  #define VersionInfoVersion "0.4.0.3"
 #endif
 #ifndef SourceDir
-  #define SourceDir "..\artifacts\release\0.4.0-preview.2\publish"
+  #define SourceDir "..\artifacts\release\0.4.0-preview.3\publish"
 #endif
 #ifndef OutputDir
-  #define OutputDir "..\artifacts\release\0.4.0-preview.2\assets"
+  #define OutputDir "..\artifacts\release\0.4.0-preview.3\assets"
 #endif
 #ifndef OutputBaseFilename
-  #define OutputBaseFilename "PerDeviceMixer-0.4.0-preview.2-win-x64-Setup"
+  #define OutputBaseFilename "PerDeviceMixer-0.4.0-preview.3-win-x64-Setup"
 #endif
 #ifndef ChineseMessagesFile
   #define ChineseMessagesFile "compiler:Languages\ChineseSimplified.isl"
@@ -65,3 +65,10 @@ Name: "{autodesktop}\PerDeviceMixer"; Filename: "{app}\PerDeviceMixer.App.exe"; 
 
 [Run]
 Filename: "{app}\PerDeviceMixer.App.exe"; Description: "启动 PerDeviceMixer"; Flags: nowait postinstall skipifsilent
+
+[Code]
+procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
+begin
+  if CurUninstallStep = usUninstall then
+    RegDeleteValue(HKCU, 'Software\Microsoft\Windows\CurrentVersion\Run', 'PerDeviceMixer');
+end;

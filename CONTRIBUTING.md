@@ -54,6 +54,14 @@ dotnet test PerDeviceMixer.slnx -c Release --no-build
 git diff --check
 ```
 
+需要检查覆盖率时，使用 Debug 构建保留可解析的本地源码路径：
+
+```powershell
+dotnet test PerDeviceMixer.slnx -c Debug --collect:"XPlat Code Coverage" --results-directory TestResults\coverage
+```
+
+`TestResults` 是本地验证产物，不应提交。
+
 涉及窗口或托盘生命周期时，可用隔离配置测量自包含构建：
 
 ```powershell

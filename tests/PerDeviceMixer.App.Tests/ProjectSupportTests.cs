@@ -42,4 +42,16 @@ public sealed class ProjectSupportTests
     {
         Assert.Equal((ApplicationInstallType)expected, InstallationDetector.Detect(installLocation, processPath));
     }
+
+    [Theory]
+    [InlineData("\"C:\\Program Files\\PerDeviceMixer\\PerDeviceMixer.App.exe\" --minimized", "C:\\Program Files\\PerDeviceMixer\\PerDeviceMixer.App.exe", true)]
+    [InlineData("\"D:\\Old\\PerDeviceMixer.App.exe\" --minimized", "C:\\Program Files\\PerDeviceMixer\\PerDeviceMixer.App.exe", false)]
+    [InlineData("\"C:\\Program Files\\PerDeviceMixer\\PerDeviceMixer.App.exe", "C:\\Program Files\\PerDeviceMixer\\PerDeviceMixer.App.exe", false)]
+    public void StartupEntryMustPointToTheCurrentExecutable(
+        string command,
+        string executablePath,
+        bool expected)
+    {
+        Assert.Equal(expected, StartupManager.IsCurrentExecutableCommand(command, executablePath));
+    }
 }

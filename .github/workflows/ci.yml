@@ -1,0 +1,28 @@
+name: verify
+
+on:
+  push:
+    branches:
+      - main
+      - codex/**
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  build-and-test:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: 10.0.303
+      - name: Restore
+        run: dotnet restore PerDeviceMixer.slnx
+      - name: Verify formatting
+        run: dotnet format PerDeviceMixer.slnx --verify-no-changes --no-restore
+      - name: Build
+        run: dotnet build PerDeviceMixer.slnx -c Release --no-restore
+      - name: Test
+        run: dotnet test PerDeviceMixer.slnx -c Release --no-build
