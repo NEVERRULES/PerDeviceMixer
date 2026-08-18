@@ -54,17 +54,17 @@
                         <CheckBox Grid.Column="1" Style="{StaticResource SwitchStyle}" IsChecked="{Binding RestoreNewSessions}" />
                     </Grid>
                 </Border>
-                <Border Padding="16,14">
+                <Border Style="{StaticResource SettingRowStyle}">
                     <Grid>
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition Width="*" />
                             <ColumnDefinition Width="Auto" />
                         </Grid.ColumnDefinitions>
                         <StackPanel>
-                            <TextBlock FontWeight="SemiBold" Text="保存静音状态" />
-                            <TextBlock Margin="0,3,0,0" Foreground="{StaticResource MutedBrush}" FontSize="12" Text="恢复音量时同时恢复设备和应用的静音状态" />
+                            <TextBlock FontWeight="SemiBold" Text="设备切换提示" />
+                            <TextBlock Margin="0,3,0,0" Foreground="{StaticResource MutedBrush}" FontSize="12" Text="切换输出设备时在屏幕下方短暂显示设备名称和主音量" />
                         </StackPanel>
-                        <CheckBox Grid.Column="1" Style="{StaticResource SwitchStyle}" IsChecked="{Binding SaveMuteState}" />
+                        <CheckBox Grid.Column="1" Style="{StaticResource SwitchStyle}" IsChecked="{Binding ShowDeviceSwitchToast}" />
                     </Grid>
                 </Border>
             </StackPanel>

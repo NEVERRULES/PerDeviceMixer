@@ -14,6 +14,7 @@ internal sealed class ApplicationController : IDisposable
         new LocalAudioDiagnosticLog());
     private readonly UpdateCoordinator _updates;
     private TrayIconService? _trayIcon;
+    private DeviceSwitchToast? _deviceSwitchToast;
     private MainWindow? _window;
     private ResourceDictionary? _windowResources;
     private readonly Dictionary<AppPage, ResourceDictionary> _pageResources = [];
@@ -32,6 +33,7 @@ internal sealed class ApplicationController : IDisposable
     public async Task InitializeAsync(CancellationToken cancellationToken = default)
     {
         await _engine.InitializeAsync(cancellationToken);
+        _deviceSwitchToast = new DeviceSwitchToast(_engine);
         _trayIcon = new TrayIconService(_engine);
         _trayIcon.ShowRequested += OnShowRequested;
         _trayIcon.ExitRequested += OnExitRequested;
@@ -344,6 +346,8 @@ internal sealed class ApplicationController : IDisposable
         if (_disposed) return;
         _disposed = true;
         CancelBackgroundMemoryOptimization();
+        _deviceSwitchToast?.Dispose();
+        _deviceSwitchToast = null;
         if (_trayIcon is not null)
         {
             _trayIcon.ShowRequested -= OnShowRequested;

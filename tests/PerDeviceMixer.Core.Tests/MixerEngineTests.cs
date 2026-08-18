@@ -157,6 +157,160 @@ public sealed class MixerEngineTests
             change.DeviceId == "capture-device" && change.Volume == 0.44f && change.Muted == true);
     }
 
+    [Theory]
+    [InlineData("wired-headphones", "bluetooth-headphones")]
+    [InlineData("bluetooth-headphones", "wired-headphones")]
+    public async Task NewlyConnectedRenderDeviceBecomesDefaultInConnectionOrder(
+        string firstDeviceId,
+        string secondDeviceId)
+    {
+        using var directory = new TemporaryDirectory();
+        var store = new JsonProfileStore(Path.Combine(directory.Path, "profiles.json"));
+        var audio = new FakeAudioService(CreateSnapshot("speakers", 0.42f, 0.67f));
+        using var engine = new MixerEngine(audio, store);
+        await engine.InitializeAsync();
+
+        audio.ConnectRenderDevice(firstDeviceId, "First headphones");
+        await WaitUntilAsync(() => Task.FromResult(
+            audio.GetDefaultRenderDeviceId() == firstDeviceId));
+
+        audio.ConnectRenderDevice(secondDeviceId, "Second headphones");
+        await WaitUntilAsync(() => Task.FromResult(
+            audio.GetDefaultRenderDeviceId() == secondDeviceId));
+
+        Assert.Equal(
+            [firstDeviceId, secondDeviceId],
+            audio.DefaultDeviceChanges
+                .Where(change => change.Direction == AudioDeviceDirection.Output)
+                .Select(change => change.DeviceId));
+    }
+
+    [Fact]
+    public async Task DisconnectingNewestRenderDeviceFallsBackThroughConnectionOrder()
+    {
+        using var directory = new TemporaryDirectory();
+        var store = new JsonProfileStore(Path.Combine(directory.Path, "profiles.json"));
+        var audio = new FakeAudioService(CreateSnapshot("speakers", 0.42f, 0.67f));
+        using var engine = new MixerEngine(audio, store);
+        await engine.InitializeAsync();
+
+        audio.ConnectRenderDevice("wired-headphones", "Wired headphones");
+        await WaitUntilAsync(() => Task.FromResult(
+            audio.GetDefaultRenderDeviceId() == "wired-headphones"));
+        audio.ConnectRenderDevice("bluetooth-headphones", "Bluetooth headphones");
+        await WaitUntilAsync(() => Task.FromResult(
+            audio.GetDefaultRenderDeviceId() == "bluetooth-headphones"));
+
+        audio.DisconnectRenderDevice("bluetooth-headphones", "speakers");
+        await WaitUntilAsync(() => Task.FromResult(
+            audio.GetDefaultRenderDeviceId() == "wired-headphones"));
+
+        audio.DisconnectRenderDevice("wired-headphones", "speakers");
+        await WaitUntilAsync(() => Task.FromResult(
+            audio.GetDefaultRenderDeviceId() == "speakers"));
+
+        Assert.Equal("speakers", audio.GetDefaultRenderDeviceId());
+    }
+
+    [Fact]
+    public async Task RapidConnectionsStillPreferTheLastDeviceNotification()
+    {
+        using var directory = new TemporaryDirectory();
+        var store = new JsonProfileStore(Path.Combine(directory.Path, "profiles.json"));
+        var audio = new FakeAudioService(CreateSnapshot("speakers", 0.42f, 0.67f));
+        using var engine = new MixerEngine(audio, store);
+        await engine.InitializeAsync();
+
+        audio.ConnectRenderDevice("wired-headphones", "Wired headphones");
+        audio.ConnectRenderDevice("bluetooth-headphones", "Bluetooth headphones");
+
+        await WaitUntilAsync(() => Task.FromResult(
+            audio.GetDefaultRenderDeviceId() == "bluetooth-headphones"));
+
+        Assert.Equal(
+            "bluetooth-headphones",
+            audio.DefaultDeviceChanges
+                .Last(change => change.Direction == AudioDeviceDirection.Output)
+                .DeviceId);
+    }
+
+    [Fact]
+    public async Task DelayedBluetoothRenderActivationBecomesDefaultWithoutAnotherNotification()
+    {
+        using var directory = new TemporaryDirectory();
+        var store = new JsonProfileStore(Path.Combine(directory.Path, "profiles.json"));
+        var audio = new FakeAudioService(CreateSnapshot("speakers", 0.42f, 0.67f));
+        using var engine = new MixerEngine(audio, store);
+        await engine.InitializeAsync();
+
+        audio.RaiseDeviceCollectionChanged("bluetooth-headphones");
+        await Task.Delay(250);
+        audio.AddRenderDeviceWithoutNotification("bluetooth-headphones", "Bluetooth headphones");
+
+        await WaitUntilAsync(() => Task.FromResult(
+            audio.GetDefaultRenderDeviceId() == "bluetooth-headphones"));
+
+        Assert.Equal(
+            "bluetooth-headphones",
+            audio.DefaultDeviceChanges
+                .Last(change => change.Direction == AudioDeviceDirection.Output)
+                .DeviceId);
+    }
+
+    [Fact]
+    public async Task DeviceCollectionBurstsDoNotBlockLaterVolumeNotifications()
+    {
+        using var directory = new TemporaryDirectory();
+        var store = new JsonProfileStore(Path.Combine(directory.Path, "profiles.json"));
+        var audio = new FakeAudioService(CreateSnapshot("speakers", 0.42f, 0.67f));
+        using var engine = new MixerEngine(audio, store);
+        await engine.InitializeAsync();
+        var completed = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        engine.MixerChanged += (_, eventArgs) =>
+        {
+            if (eventArgs.Kind == AudioChangeKind.MasterVolume && eventArgs.Volume == 0.73f)
+            {
+                completed.TrySetResult();
+            }
+        };
+
+        for (var index = 0; index < 20; index++)
+        {
+            audio.RaiseDeviceCollectionChanged($"bluetooth-state-{index}");
+        }
+
+        audio.RaiseMasterVolumeChanged(0.73f, true);
+
+        await completed.Task.WaitAsync(TimeSpan.FromSeconds(1));
+        Assert.Equal(0.73f, engine.Profiles.Devices["speakers"].MasterVolume);
+        Assert.True(engine.Profiles.Devices["speakers"].MasterMuted);
+    }
+
+    [Fact]
+    public async Task WindowsDefaultBeforeAConnectionBecomesTheDisconnectFallback()
+    {
+        using var directory = new TemporaryDirectory();
+        var store = new JsonProfileStore(Path.Combine(directory.Path, "profiles.json"));
+        var audio = new FakeAudioService(CreateSnapshot("speakers", 0.42f, 0.67f));
+        audio.AddRenderDeviceWithoutNotification("wired-headphones", "Wired headphones");
+        using var engine = new MixerEngine(audio, store);
+        await engine.InitializeAsync();
+
+        audio.SetWindowsDefaultRenderDevice("wired-headphones");
+        await WaitUntilAsync(() => Task.FromResult(
+            audio.GetDefaultRenderDeviceId() == "wired-headphones"));
+        audio.ConnectRenderDevice("bluetooth-headphones", "Bluetooth headphones");
+        await WaitUntilAsync(() => Task.FromResult(
+            audio.GetDefaultRenderDeviceId() == "bluetooth-headphones"));
+
+        audio.DisconnectRenderDevice("bluetooth-headphones", "speakers");
+        await WaitUntilAsync(() => Task.FromResult(
+            audio.GetDefaultRenderDeviceId() == "wired-headphones"));
+
+        Assert.Equal("wired-headphones", audio.GetDefaultRenderDeviceId());
+    }
+
     [Fact]
     public async Task SettingsAreAutomaticallySavedAfterTheDebounceInterval()
     {
@@ -177,6 +331,27 @@ public sealed class MixerEngineTests
         {
             var loaded = await store.LoadAsync();
             return !loaded.Settings.AutomaticUpdateChecks && loaded.Settings.UpdateCheckIntervalHours == 72;
+        });
+    }
+
+    [Fact]
+    public async Task DeviceSwitchToastSettingIsSavedAndRestored()
+    {
+        using var directory = new TemporaryDirectory();
+        var store = new JsonProfileStore(Path.Combine(directory.Path, "profiles.json"));
+        var audio = new FakeAudioService(CreateSnapshot("device-new", 0.42f, 0.67f));
+        using var engine = new MixerEngine(audio, store);
+        await engine.InitializeAsync();
+
+        Assert.True(engine.GetSettingsSnapshot().ShowDeviceSwitchToast);
+
+        engine.UpdateSettings(settings => settings.ShowDeviceSwitchToast = false);
+        Assert.False(engine.GetSettingsSnapshot().ShowDeviceSwitchToast);
+
+        await WaitUntilAsync(async () =>
+        {
+            var loaded = await store.LoadAsync();
+            return !loaded.Settings.ShowDeviceSwitchToast;
         });
     }
 
@@ -361,6 +536,11 @@ public sealed class MixerEngineTests
     private sealed class FakeAudioService(MixerSnapshot snapshot) : IAudioService
     {
         private MixerSnapshot _snapshot = snapshot;
+        private readonly Dictionary<string, AudioEndpointInfo> _renderDevices =
+            new(StringComparer.OrdinalIgnoreCase)
+            {
+                [snapshot.Endpoint.Id] = snapshot.Endpoint
+            };
 
         public event EventHandler<AudioStateChangedEventArgs>? StateChanged;
 
@@ -369,7 +549,15 @@ public sealed class MixerEngineTests
         public List<(string DeviceId, AudioDeviceDirection Direction)> DefaultDeviceChanges { get; } = [];
         public int SnapshotReadCount { get; private set; }
 
-        public IReadOnlyList<AudioEndpointInfo> GetRenderDevices() => [_snapshot.Endpoint];
+        public IReadOnlyList<AudioEndpointInfo> GetRenderDevices() => _renderDevices.Values
+            .Select(device => device with
+            {
+                IsDefault = string.Equals(
+                    device.Id,
+                    _snapshot.Endpoint.Id,
+                    StringComparison.OrdinalIgnoreCase)
+            })
+            .ToArray();
         public IReadOnlyList<AudioEndpointInfo> GetCaptureDevices() =>
             [new AudioEndpointInfo("capture-device", "Test microphone", true, 0.5f, false)];
         public string? GetDefaultRenderDeviceId() => _snapshot.Endpoint.Id;
@@ -405,10 +593,86 @@ public sealed class MixerEngineTests
             };
         }
 
-        public void SetDefaultDevice(string deviceId, AudioDeviceDirection direction) =>
+        public void SetDefaultDevice(string deviceId, AudioDeviceDirection direction)
+        {
             DefaultDeviceChanges.Add((deviceId, direction));
+            if (direction != AudioDeviceDirection.Output ||
+                !_renderDevices.TryGetValue(deviceId, out var endpoint))
+            {
+                return;
+            }
+
+            var wasDefault = string.Equals(
+                _snapshot.Endpoint.Id,
+                deviceId,
+                StringComparison.OrdinalIgnoreCase);
+            _snapshot = _snapshot with { Endpoint = endpoint with { IsDefault = true } };
+            if (wasDefault) return;
+
+            StateChanged?.Invoke(
+                this,
+                new AudioStateChangedEventArgs(AudioChangeKind.DefaultDevice, deviceId));
+        }
 
         public void StartMonitoring() { }
+
+        public void AddRenderDeviceWithoutNotification(string deviceId, string name)
+        {
+            _renderDevices[deviceId] = new AudioEndpointInfo(
+                deviceId,
+                name,
+                false,
+                0.5f,
+                false);
+        }
+
+        public void SetWindowsDefaultRenderDevice(string deviceId)
+        {
+            if (!_renderDevices.TryGetValue(deviceId, out var endpoint)) return;
+            _snapshot = _snapshot with { Endpoint = endpoint with { IsDefault = true } };
+            StateChanged?.Invoke(
+                this,
+                new AudioStateChangedEventArgs(AudioChangeKind.DefaultDevice, deviceId));
+        }
+
+        public void ConnectRenderDevice(string deviceId, string name)
+        {
+            _renderDevices[deviceId] = new AudioEndpointInfo(
+                deviceId,
+                name,
+                false,
+                0.5f,
+                false);
+            StateChanged?.Invoke(
+                this,
+                new AudioStateChangedEventArgs(AudioChangeKind.DeviceCollection, deviceId));
+        }
+
+        public void DisconnectRenderDevice(string deviceId, string windowsFallbackDeviceId)
+        {
+            _renderDevices.Remove(deviceId);
+            if (string.Equals(
+                    _snapshot.Endpoint.Id,
+                    deviceId,
+                    StringComparison.OrdinalIgnoreCase) &&
+                _renderDevices.TryGetValue(windowsFallbackDeviceId, out var fallback))
+            {
+                _snapshot = _snapshot with { Endpoint = fallback with { IsDefault = true } };
+                StateChanged?.Invoke(
+                    this,
+                    new AudioStateChangedEventArgs(
+                        AudioChangeKind.DefaultDevice,
+                        windowsFallbackDeviceId));
+            }
+
+            StateChanged?.Invoke(
+                this,
+                new AudioStateChangedEventArgs(AudioChangeKind.DeviceCollection, deviceId));
+        }
+
+        public void RaiseDeviceCollectionChanged(string? deviceId = null) => StateChanged?.Invoke(
+            this,
+            new AudioStateChangedEventArgs(AudioChangeKind.DeviceCollection, deviceId));
 
         public void RaiseSessionCreated(string applicationKey) => StateChanged?.Invoke(
             this,

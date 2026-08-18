@@ -33,6 +33,7 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
     private bool _autoRestore = true;
     private bool _restoreNewSessions = true;
     private bool _saveMuteState = true;
+    private bool _showDeviceSwitchToast = true;
     private bool _audioDiagnosticsEnabled;
     private double _saveDebounceMilliseconds = 500;
     private bool _startWithWindows;
@@ -237,6 +238,16 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
         }
     }
 
+    public bool ShowDeviceSwitchToast
+    {
+        get => _showDeviceSwitchToast;
+        set
+        {
+            if (!SetField(ref _showDeviceSwitchToast, value)) return;
+            SaveSetting(settings => settings.ShowDeviceSwitchToast = value);
+        }
+    }
+
     public bool AudioDiagnosticsEnabled
     {
         get => _audioDiagnosticsEnabled;
@@ -384,6 +395,7 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
         _autoRestore = settings.AutoRestore;
         _restoreNewSessions = settings.RestoreNewSessions;
         _saveMuteState = settings.SaveMuteState;
+        _showDeviceSwitchToast = settings.ShowDeviceSwitchToast;
         _audioDiagnosticsEnabled = settings.AudioDiagnosticsEnabled;
         _saveDebounceMilliseconds = settings.SaveDebounceMilliseconds;
         _startWithWindows = StartupManager.IsEnabled;
@@ -397,6 +409,7 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
         OnPropertyChanged(nameof(AutoRestore));
         OnPropertyChanged(nameof(RestoreNewSessions));
         OnPropertyChanged(nameof(SaveMuteState));
+        OnPropertyChanged(nameof(ShowDeviceSwitchToast));
         OnPropertyChanged(nameof(AudioDiagnosticsEnabled));
         OnPropertyChanged(nameof(SaveDebounceMilliseconds));
         OnPropertyChanged(nameof(StartWithWindows));

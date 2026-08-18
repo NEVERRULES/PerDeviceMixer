@@ -1,17 +1,17 @@
 #ifndef AppVersion
-  #define AppVersion "0.4.0-preview.3"
+  #define AppVersion "0.4.0-preview.6"
 #endif
 #ifndef VersionInfoVersion
-  #define VersionInfoVersion "0.4.0.3"
+  #define VersionInfoVersion "0.4.0.6"
 #endif
 #ifndef SourceDir
-  #define SourceDir "..\artifacts\release\0.4.0-preview.3\publish"
+  #define SourceDir "..\artifacts\release\0.4.0-preview.6\publish"
 #endif
 #ifndef OutputDir
-  #define OutputDir "..\artifacts\release\0.4.0-preview.3\assets"
+  #define OutputDir "..\artifacts\release\0.4.0-preview.6\assets"
 #endif
 #ifndef OutputBaseFilename
-  #define OutputBaseFilename "PerDeviceMixer-0.4.0-preview.3-win-x64-Setup"
+  #define OutputBaseFilename "PerDeviceMixer-0.4.0-preview.6-win-x64-Setup"
 #endif
 #ifndef ChineseMessagesFile
   #define ChineseMessagesFile "compiler:Languages\ChineseSimplified.isl"

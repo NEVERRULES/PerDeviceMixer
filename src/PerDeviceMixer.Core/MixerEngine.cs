@@ -6,6 +6,20 @@ namespace PerDeviceMixer.Core;
 
 public sealed class MixerEngine : IDisposable
 {
+    private static readonly TimeSpan[] RenderDevicePriorityRetryDelays =
+    [
+        TimeSpan.FromMilliseconds(50),
+        TimeSpan.FromMilliseconds(100),
+        TimeSpan.FromMilliseconds(200),
+        TimeSpan.FromMilliseconds(400),
+        TimeSpan.FromMilliseconds(800),
+        TimeSpan.FromMilliseconds(1200),
+        TimeSpan.FromMilliseconds(1600),
+        TimeSpan.FromMilliseconds(2000),
+        TimeSpan.FromMilliseconds(2500),
+        TimeSpan.FromMilliseconds(3500)
+    ];
+
     private readonly IAudioService audio;
     private readonly IProfileStore profileStore;
     private readonly SemaphoreSlim _operationLock = new(1, 1);
@@ -28,8 +42,18 @@ public sealed class MixerEngine : IDisposable
         });
     private readonly CancellationTokenSource _saveWorkerShutdown = new();
     private readonly Task _saveWorker;
+    private readonly object _renderDevicePriorityGate = new();
+    private readonly HashSet<string> _activeRenderDeviceIds =
+        new(StringComparer.OrdinalIgnoreCase);
+    private readonly List<string> _renderDevicePriority = [];
+    private readonly object _renderDeviceReconcileGate = new();
+    private readonly CancellationTokenSource _renderDeviceReconcileShutdown = new();
     private MixerProfileDocument _document = new();
+    private Task? _renderDeviceReconcileTask;
+    private string? _pendingRenderDeviceChangeId;
     private long _saveRevision;
+    private long _renderDeviceReconcileRevision;
+    private bool _renderDevicePriorityInitialized;
     private bool _isRestoring;
     private bool _disposed;
 
@@ -62,6 +86,7 @@ public sealed class MixerEngine : IDisposable
                 AutoRestore = _document.Settings.AutoRestore,
                 RestoreNewSessions = _document.Settings.RestoreNewSessions,
                 SaveMuteState = _document.Settings.SaveMuteState,
+                ShowDeviceSwitchToast = _document.Settings.ShowDeviceSwitchToast,
                 AudioDiagnosticsEnabled = _document.Settings.AudioDiagnosticsEnabled,
                 SaveDebounceMilliseconds = _document.Settings.SaveDebounceMilliseconds,
                 StartWithWindows = _document.Settings.StartWithWindows,
@@ -83,6 +108,19 @@ public sealed class MixerEngine : IDisposable
         _document = await profileStore.LoadAsync(cancellationToken);
         audio.StateChanged += OnAudioStateChanged;
         audio.StartMonitoring();
+        try
+        {
+            InitializeRenderDevicePriority();
+        }
+        catch (Exception exception)
+        {
+            // Endpoint enumeration can fail while Bluetooth, HDMI, or sleep-resume is settling.
+            // The next device notification will initialize the priority state again.
+            RecordDiagnostic(
+                new AudioStateChangedEventArgs(AudioChangeKind.DeviceCollection),
+                "priority-init-failed",
+                exception);
+        }
 
         var snapshot = await GetSnapshotWithRetryAsync(5, cancellationToken);
         if (snapshot is null)
@@ -123,8 +161,11 @@ public sealed class MixerEngine : IDisposable
 
     public string? GetDefaultCaptureDeviceId() => audio.GetDefaultCaptureDeviceId();
 
-    public void SetDefaultOutputDevice(string deviceId) =>
+    public void SetDefaultOutputDevice(string deviceId)
+    {
         audio.SetDefaultDevice(deviceId, AudioDeviceDirection.Output);
+        PromoteRenderDevice(deviceId);
+    }
 
     public void SetDefaultInputDevice(string deviceId) =>
         audio.SetDefaultDevice(deviceId, AudioDeviceDirection.Input);
@@ -334,8 +375,25 @@ public sealed class MixerEngine : IDisposable
         try
         {
             RecordDiagnostic(args, "received");
+            if (args.Kind == AudioChangeKind.DeviceCollection)
+            {
+                ScheduleRenderDevicePriorityReconcile(args.DeviceId);
+                MixerChanged?.Invoke(this, args);
+                RecordDiagnostic(args, "scheduled");
+                return;
+            }
+
             if (args.Kind == AudioChangeKind.DefaultDevice)
             {
+                // A removal can make Windows publish its own fallback before the collection event.
+                // Reconcile membership here as well, but never interpret an arbitrary Windows
+                // default change as a newly connected device.
+                if (ReconcileRenderDevicePriority())
+                {
+                    RecordDiagnostic(args, "redirected");
+                    return;
+                }
+
                 var snapshot = audio.GetDefaultMixerSnapshot();
                 if (snapshot is null) return;
 
@@ -397,6 +455,256 @@ public sealed class MixerEngine : IDisposable
             // Record the failure when explicitly enabled; the next notification can refresh the state.
             RecordDiagnostic(args, "failed", exception);
         }
+    }
+
+    private void ScheduleRenderDevicePriorityReconcile(string? changedDeviceId)
+    {
+        if (_disposed) return;
+
+        lock (_renderDeviceReconcileGate)
+        {
+            if (!string.IsNullOrWhiteSpace(changedDeviceId))
+            {
+                _pendingRenderDeviceChangeId = changedDeviceId;
+            }
+
+            _renderDeviceReconcileRevision++;
+            if (_renderDeviceReconcileTask is null || _renderDeviceReconcileTask.IsCompleted)
+            {
+                _renderDeviceReconcileTask = Task.Run(RunRenderDevicePriorityReconcileAsync);
+            }
+        }
+    }
+
+    private async Task RunRenderDevicePriorityReconcileAsync()
+    {
+        var cancellationToken = _renderDeviceReconcileShutdown.Token;
+        var retryIndex = 0;
+        string? changedDeviceId = null;
+
+        try
+        {
+            while (!_disposed)
+            {
+                lock (_renderDeviceReconcileGate)
+                {
+                    if (_pendingRenderDeviceChangeId is not null)
+                    {
+                        changedDeviceId = _pendingRenderDeviceChangeId;
+                        _pendingRenderDeviceChangeId = null;
+                    }
+                }
+
+                var delay = RenderDevicePriorityRetryDelays[
+                    Math.Min(retryIndex, RenderDevicePriorityRetryDelays.Length - 1)];
+                await Task.Delay(delay, cancellationToken).ConfigureAwait(false);
+                if (_disposed) break;
+
+                long observedRevision;
+                lock (_renderDeviceReconcileGate)
+                {
+                    observedRevision = _renderDeviceReconcileRevision;
+                    if (_pendingRenderDeviceChangeId is not null)
+                    {
+                        changedDeviceId = _pendingRenderDeviceChangeId;
+                        _pendingRenderDeviceChangeId = null;
+                    }
+                }
+
+                var diagnosticArgs = new AudioStateChangedEventArgs(
+                    AudioChangeKind.DeviceCollection,
+                    changedDeviceId);
+                var redirected = false;
+                try
+                {
+                    redirected = ReconcileRenderDevicePriority(changedDeviceId);
+                    RecordDiagnostic(
+                        diagnosticArgs,
+                        redirected ? "priority-redirected" : "priority-checked");
+                }
+                catch (Exception exception)
+                {
+                    RecordDiagnostic(diagnosticArgs, "priority-failed", exception);
+                }
+
+                lock (_renderDeviceReconcileGate)
+                {
+                    var hasNewWork = observedRevision != _renderDeviceReconcileRevision ||
+                        _pendingRenderDeviceChangeId is not null;
+                    if (!hasNewWork &&
+                        (redirected || retryIndex >= RenderDevicePriorityRetryDelays.Length - 1))
+                    {
+                        _renderDeviceReconcileTask = null;
+                        return;
+                    }
+
+                    retryIndex = hasNewWork ? 0 : retryIndex + 1;
+                }
+            }
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+        }
+
+        lock (_renderDeviceReconcileGate)
+        {
+            if (_disposed || cancellationToken.IsCancellationRequested)
+            {
+                _renderDeviceReconcileTask = null;
+            }
+        }
+    }
+
+    private void InitializeRenderDevicePriority()
+    {
+        var devices = audio.GetRenderDevices();
+        var defaultDeviceId = audio.GetDefaultRenderDeviceId();
+        lock (_renderDevicePriorityGate)
+        {
+            InitializeRenderDevicePriorityCore(
+                devices.Select(device => device.Id),
+                defaultDeviceId);
+        }
+    }
+
+    private bool ReconcileRenderDevicePriority(string? changedDeviceId = null)
+    {
+        var devices = audio.GetRenderDevices();
+        var activeIds = devices
+            .Select(device => device.Id)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+        var defaultDeviceId = audio.GetDefaultRenderDeviceId();
+        string? preferredDeviceId;
+        bool priorityChanged;
+
+        lock (_renderDevicePriorityGate)
+        {
+            if (!_renderDevicePriorityInitialized)
+            {
+                InitializeRenderDevicePriorityCore(activeIds, defaultDeviceId);
+                if (changedDeviceId is not null && _activeRenderDeviceIds.Contains(changedDeviceId))
+                {
+                    MoveRenderDeviceToTopCore(changedDeviceId);
+                    priorityChanged = true;
+                }
+                else
+                {
+                    priorityChanged = false;
+                }
+            }
+            else
+            {
+                var nextActiveIds = activeIds.ToHashSet(StringComparer.OrdinalIgnoreCase);
+                var addedIds = activeIds
+                    .Where(id => !_activeRenderDeviceIds.Contains(id))
+                    .ToArray();
+                priorityChanged = !_activeRenderDeviceIds.SetEquals(nextActiveIds);
+
+                // Preserve the device that was in use immediately before a new endpoint arrived.
+                // This also respects a default chosen directly in Windows, not only in this app.
+                if (addedIds.Length > 0 &&
+                    defaultDeviceId is not null &&
+                    nextActiveIds.Contains(defaultDeviceId) &&
+                    !addedIds.Contains(defaultDeviceId, StringComparer.OrdinalIgnoreCase))
+                {
+                    MoveRenderDeviceToTopCore(defaultDeviceId);
+                }
+
+                _renderDevicePriority.RemoveAll(id => !nextActiveIds.Contains(id));
+
+                foreach (var id in activeIds)
+                {
+                    if (_activeRenderDeviceIds.Contains(id) ||
+                        string.Equals(id, changedDeviceId, StringComparison.OrdinalIgnoreCase))
+                    {
+                        continue;
+                    }
+
+                    _renderDevicePriority.Add(id);
+                }
+
+                if (changedDeviceId is not null && nextActiveIds.Contains(changedDeviceId))
+                {
+                    priorityChanged |= !string.Equals(
+                        _renderDevicePriority.LastOrDefault(),
+                        changedDeviceId,
+                        StringComparison.OrdinalIgnoreCase);
+                    MoveRenderDeviceToTopCore(changedDeviceId);
+                }
+
+                _activeRenderDeviceIds.Clear();
+                _activeRenderDeviceIds.UnionWith(nextActiveIds);
+            }
+
+            preferredDeviceId = _renderDevicePriority.LastOrDefault(
+                id => _activeRenderDeviceIds.Contains(id));
+        }
+
+        if (!priorityChanged || preferredDeviceId is null ||
+            string.Equals(preferredDeviceId, defaultDeviceId, StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        try
+        {
+            audio.SetDefaultDevice(preferredDeviceId, AudioDeviceDirection.Output);
+        }
+        catch
+        {
+            lock (_renderDevicePriorityGate)
+            {
+                _activeRenderDeviceIds.Remove(preferredDeviceId);
+                _renderDevicePriority.RemoveAll(
+                    id => string.Equals(id, preferredDeviceId, StringComparison.OrdinalIgnoreCase));
+            }
+
+            throw;
+        }
+
+        return true;
+    }
+
+    private void InitializeRenderDevicePriorityCore(
+        IEnumerable<string> activeDeviceIds,
+        string? defaultDeviceId)
+    {
+        _activeRenderDeviceIds.Clear();
+        _renderDevicePriority.Clear();
+
+        foreach (var id in activeDeviceIds.Distinct(StringComparer.OrdinalIgnoreCase))
+        {
+            _activeRenderDeviceIds.Add(id);
+            if (!string.Equals(id, defaultDeviceId, StringComparison.OrdinalIgnoreCase))
+            {
+                _renderDevicePriority.Add(id);
+            }
+        }
+
+        if (defaultDeviceId is not null && _activeRenderDeviceIds.Contains(defaultDeviceId))
+        {
+            _renderDevicePriority.Add(defaultDeviceId);
+        }
+
+        _renderDevicePriorityInitialized = true;
+    }
+
+    private void PromoteRenderDevice(string deviceId)
+    {
+        lock (_renderDevicePriorityGate)
+        {
+            _activeRenderDeviceIds.Add(deviceId);
+            MoveRenderDeviceToTopCore(deviceId);
+            _renderDevicePriorityInitialized = true;
+        }
+    }
+
+    private void MoveRenderDeviceToTopCore(string deviceId)
+    {
+        _renderDevicePriority.RemoveAll(
+            id => string.Equals(id, deviceId, StringComparison.OrdinalIgnoreCase));
+        _renderDevicePriority.Add(deviceId);
     }
 
     private void RecordDiagnostic(
@@ -648,6 +956,21 @@ public sealed class MixerEngine : IDisposable
         audio.StateChanged -= OnAudioStateChanged;
         _audioEvents.Writer.TryComplete();
         _saveRequests.Writer.TryComplete();
+        _renderDeviceReconcileShutdown.Cancel();
+        Task? renderDeviceReconcileTask;
+        lock (_renderDeviceReconcileGate)
+        {
+            renderDeviceReconcileTask = _renderDeviceReconcileTask;
+        }
+
+        try
+        {
+            renderDeviceReconcileTask?.Wait(TimeSpan.FromSeconds(2));
+        }
+        catch (AggregateException)
+        {
+        }
+
         try
         {
             _audioEventWorker.Wait(TimeSpan.FromSeconds(2));
@@ -666,6 +989,7 @@ public sealed class MixerEngine : IDisposable
         }
         _audioEventWorkerShutdown.Dispose();
         _saveWorkerShutdown.Dispose();
+        _renderDeviceReconcileShutdown.Dispose();
         audio.Dispose();
     }
 }

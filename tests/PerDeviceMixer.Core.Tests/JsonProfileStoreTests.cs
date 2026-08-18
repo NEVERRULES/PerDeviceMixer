@@ -81,6 +81,28 @@ public sealed class JsonProfileStoreTests
         Assert.Null(loaded.Settings.LastUpdateAttemptUtc);
     }
 
+    [Fact]
+    public async Task LoadAsyncDefaultsDeviceSwitchToastToEnabledForLegacySettings()
+    {
+        using var directory = new TemporaryDirectory();
+        var path = Path.Combine(directory.Path, "profiles.json");
+        await File.WriteAllTextAsync(path, """
+            {
+              "SchemaVersion": 2,
+              "Settings": {
+                "AutoLearn": true,
+                "SaveMuteState": true
+              },
+              "Devices": {}
+            }
+            """);
+        var store = new JsonProfileStore(path);
+
+        var loaded = await store.LoadAsync();
+
+        Assert.True(loaded.Settings.ShowDeviceSwitchToast);
+    }
+
     private static MixerProfileDocument CreateDocument()
     {
         var document = new MixerProfileDocument();
