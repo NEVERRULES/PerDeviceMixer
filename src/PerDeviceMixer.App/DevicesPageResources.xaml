@@ -10,6 +10,59 @@
                    FontSize="13"
                    Text="选择默认输出和输入，并控制设备音量" />
 
+        <Border Margin="0,0,0,22"
+                Padding="18,16"
+                CornerRadius="10"
+                Background="{StaticResource SurfaceBrush}"
+                BorderBrush="#2D8B68"
+                BorderThickness="1"
+                Visibility="{Binding HeadphoneBatteryVisibility}">
+            <StackPanel>
+                <Grid>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="Auto" />
+                    </Grid.ColumnDefinitions>
+                    <StackPanel>
+                        <TextBlock FontSize="16"
+                                   FontWeight="SemiBold"
+                                   Text="{Binding HeadphoneBatteryTitle}" />
+                        <TextBlock Margin="0,4,0,0"
+                                   Foreground="{StaticResource MutedBrush}"
+                                   FontSize="12"
+                                   Text="{Binding HeadphoneBatteryStateText}" />
+                    </StackPanel>
+                    <Border Grid.Column="1"
+                            Padding="9,4"
+                            CornerRadius="9"
+                            Background="#183A30">
+                        <TextBlock Foreground="#78D9B0"
+                                   FontSize="11"
+                                   Text="已连接" />
+                    </Border>
+                </Grid>
+                <Grid Margin="0,16,0,0">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="*" />
+                    </Grid.ColumnDefinitions>
+                    <StackPanel Grid.Column="0">
+                        <TextBlock Foreground="{StaticResource MutedBrush}" FontSize="11" Text="左耳" />
+                        <TextBlock Margin="0,3,0,0" FontSize="18" FontWeight="SemiBold" Text="{Binding LeftHeadphoneBatteryText}" />
+                    </StackPanel>
+                    <StackPanel Grid.Column="1">
+                        <TextBlock Foreground="{StaticResource MutedBrush}" FontSize="11" Text="右耳" />
+                        <TextBlock Margin="0,3,0,0" FontSize="18" FontWeight="SemiBold" Text="{Binding RightHeadphoneBatteryText}" />
+                    </StackPanel>
+                    <StackPanel Grid.Column="2">
+                        <TextBlock Foreground="{StaticResource MutedBrush}" FontSize="11" Text="充电盒" />
+                        <TextBlock Margin="0,3,0,0" FontSize="18" FontWeight="SemiBold" Text="{Binding CaseHeadphoneBatteryText}" />
+                    </StackPanel>
+                </Grid>
+            </StackPanel>
+        </Border>
+
         <Grid Margin="0,0,0,10">
             <Grid.ColumnDefinitions>
                 <ColumnDefinition Width="*" />

@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Threading.Channels;
 using System.Security.Cryptography;
 using System.Text;
@@ -6,19 +7,9 @@ namespace PerDeviceMixer.Core;
 
 public sealed class MixerEngine : IDisposable
 {
-    private static readonly TimeSpan[] RenderDevicePriorityRetryDelays =
-    [
-        TimeSpan.FromMilliseconds(50),
-        TimeSpan.FromMilliseconds(100),
-        TimeSpan.FromMilliseconds(200),
-        TimeSpan.FromMilliseconds(400),
-        TimeSpan.FromMilliseconds(800),
-        TimeSpan.FromMilliseconds(1200),
-        TimeSpan.FromMilliseconds(1600),
-        TimeSpan.FromMilliseconds(2000),
-        TimeSpan.FromMilliseconds(2500),
-        TimeSpan.FromMilliseconds(3500)
-    ];
+    private static readonly TimeSpan RenderDevicePriorityInitialRetryDelay = TimeSpan.FromMilliseconds(50);
+    private static readonly TimeSpan RenderDevicePriorityRetryInterval = TimeSpan.FromMilliseconds(200);
+    private static readonly TimeSpan RenderDevicePriorityRetryWindow = TimeSpan.FromSeconds(12);
 
     private readonly IAudioService audio;
     private readonly IProfileStore profileStore;
@@ -48,6 +39,7 @@ public sealed class MixerEngine : IDisposable
     private readonly List<string> _renderDevicePriority = [];
     private readonly object _renderDeviceReconcileGate = new();
     private readonly CancellationTokenSource _renderDeviceReconcileShutdown = new();
+    private readonly SemaphoreSlim _renderDeviceReconcileWakeSignal = new(0, 1);
     private MixerProfileDocument _document = new();
     private Task? _renderDeviceReconcileTask;
     private string? _pendingRenderDeviceChangeId;
@@ -87,6 +79,7 @@ public sealed class MixerEngine : IDisposable
                 RestoreNewSessions = _document.Settings.RestoreNewSessions,
                 SaveMuteState = _document.Settings.SaveMuteState,
                 ShowDeviceSwitchToast = _document.Settings.ShowDeviceSwitchToast,
+                ShowSupportedHeadphoneBattery = _document.Settings.ShowSupportedHeadphoneBattery,
                 AudioDiagnosticsEnabled = _document.Settings.AudioDiagnosticsEnabled,
                 SaveDebounceMilliseconds = _document.Settings.SaveDebounceMilliseconds,
                 StartWithWindows = _document.Settings.StartWithWindows,
@@ -377,6 +370,13 @@ public sealed class MixerEngine : IDisposable
             RecordDiagnostic(args, "received");
             if (args.Kind == AudioChangeKind.DeviceCollection)
             {
+                if (args.DeviceDirection == AudioDeviceDirection.Input)
+                {
+                    MixerChanged?.Invoke(this, args);
+                    RecordDiagnostic(args, "ignored-input");
+                    return;
+                }
+
                 ScheduleRenderDevicePriorityReconcile(args.DeviceId);
                 MixerChanged?.Invoke(this, args);
                 RecordDiagnostic(args, "scheduled");
@@ -473,13 +473,18 @@ public sealed class MixerEngine : IDisposable
             {
                 _renderDeviceReconcileTask = Task.Run(RunRenderDevicePriorityReconcileAsync);
             }
+            else if (_renderDeviceReconcileWakeSignal.CurrentCount == 0)
+            {
+                _renderDeviceReconcileWakeSignal.Release();
+            }
         }
     }
 
     private async Task RunRenderDevicePriorityReconcileAsync()
     {
         var cancellationToken = _renderDeviceReconcileShutdown.Token;
-        var retryIndex = 0;
+        var retryWindowStartedAt = Stopwatch.GetTimestamp();
+        var nextDelay = RenderDevicePriorityInitialRetryDelay;
         string? changedDeviceId = null;
 
         try
@@ -495,9 +500,7 @@ public sealed class MixerEngine : IDisposable
                     }
                 }
 
-                var delay = RenderDevicePriorityRetryDelays[
-                    Math.Min(retryIndex, RenderDevicePriorityRetryDelays.Length - 1)];
-                await Task.Delay(delay, cancellationToken).ConfigureAwait(false);
+                await WaitForRenderDeviceReconcileAsync(nextDelay, cancellationToken).ConfigureAwait(false);
                 if (_disposed) break;
 
                 long observedRevision;
@@ -532,13 +535,21 @@ public sealed class MixerEngine : IDisposable
                     var hasNewWork = observedRevision != _renderDeviceReconcileRevision ||
                         _pendingRenderDeviceChangeId is not null;
                     if (!hasNewWork &&
-                        (redirected || retryIndex >= RenderDevicePriorityRetryDelays.Length - 1))
+                        (redirected || Stopwatch.GetElapsedTime(retryWindowStartedAt) >= RenderDevicePriorityRetryWindow))
                     {
                         _renderDeviceReconcileTask = null;
                         return;
                     }
 
-                    retryIndex = hasNewWork ? 0 : retryIndex + 1;
+                    if (hasNewWork)
+                    {
+                        retryWindowStartedAt = Stopwatch.GetTimestamp();
+                        nextDelay = TimeSpan.Zero;
+                    }
+                    else
+                    {
+                        nextDelay = RenderDevicePriorityRetryInterval;
+                    }
                 }
             }
         }
@@ -552,6 +563,43 @@ public sealed class MixerEngine : IDisposable
             {
                 _renderDeviceReconcileTask = null;
             }
+        }
+    }
+
+    private async Task WaitForRenderDeviceReconcileAsync(
+        TimeSpan delay,
+        CancellationToken cancellationToken)
+    {
+        if (delay == TimeSpan.Zero) return;
+
+        using var waitCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        var delayTask = Task.Delay(delay, waitCancellation.Token);
+        var wakeTask = _renderDeviceReconcileWakeSignal.WaitAsync(waitCancellation.Token);
+        var completedTask = await Task.WhenAny(delayTask, wakeTask).ConfigureAwait(false);
+
+        if (completedTask == wakeTask)
+        {
+            await wakeTask.ConfigureAwait(false);
+            waitCancellation.Cancel();
+            try
+            {
+                await delayTask.ConfigureAwait(false);
+            }
+            catch (OperationCanceledException)
+            {
+            }
+
+            return;
+        }
+
+        await delayTask.ConfigureAwait(false);
+        waitCancellation.Cancel();
+        try
+        {
+            await wakeTask.ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
         }
     }
 
@@ -990,6 +1038,7 @@ public sealed class MixerEngine : IDisposable
         _audioEventWorkerShutdown.Dispose();
         _saveWorkerShutdown.Dispose();
         _renderDeviceReconcileShutdown.Dispose();
+        _renderDeviceReconcileWakeSignal.Dispose();
         audio.Dispose();
     }
 }

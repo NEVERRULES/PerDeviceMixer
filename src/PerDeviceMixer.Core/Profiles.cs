@@ -19,6 +19,7 @@ public sealed class MixerSettings
     public bool RestoreNewSessions { get; set; } = true;
     public bool SaveMuteState { get; set; } = true;
     public bool ShowDeviceSwitchToast { get; set; } = true;
+    public bool ShowSupportedHeadphoneBattery { get; set; } = true;
     public bool AudioDiagnosticsEnabled { get; set; }
     public int SaveDebounceMilliseconds { get; set; } = 500;
     public bool StartWithWindows { get; set; }

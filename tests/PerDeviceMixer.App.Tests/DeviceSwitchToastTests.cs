@@ -1,4 +1,5 @@
 using PerDeviceMixer.App;
+using PerDeviceMixer.Bluetooth;
 using PerDeviceMixer.Core;
 
 namespace PerDeviceMixer.App.Tests;
@@ -88,6 +89,78 @@ public sealed class DeviceSwitchToastTests
     public void ShouldShowIsFalseForMissingDeviceId(string? deviceId)
     {
         Assert.False(DeviceSwitchToast.ShouldShow(deviceId, "headphones"));
+    }
+
+    [Fact]
+    public void FormatBatteryTextShowsAllComponentsAndCharging()
+    {
+        var status = new HeadphoneBatteryStatus(
+            true,
+            "Beats Fit Pro",
+            new HeadphoneBatteryState(
+                AppleHeadphoneIds.BeatsFitProProductId,
+                "Beats Fit Pro",
+                80,
+                null,
+                60,
+                true,
+                false,
+                true,
+                HeadphoneSide.Left,
+                -40,
+                DateTimeOffset.UnixEpoch),
+            null);
+
+        Assert.Equal(
+            "左 80% ⚡ · 右 -- · 充电盒 60% ⚡",
+            DeviceSwitchToast.FormatBatteryText(status));
+    }
+
+    [Fact]
+    public void FormatBatteryTextIsEmptyForInactiveDevice()
+    {
+        Assert.Equal(
+            string.Empty,
+            DeviceSwitchToast.FormatBatteryText(HeadphoneBatteryStatus.Inactive));
+    }
+
+    [Fact]
+    public void FormatBatteryTextDoesNotShowChargingForUnavailableComponent()
+    {
+        var status = new HeadphoneBatteryStatus(
+            true,
+            "Beats Fit Pro",
+            new HeadphoneBatteryState(
+                AppleHeadphoneIds.BeatsFitProProductId,
+                "Beats Fit Pro",
+                80,
+                80,
+                null,
+                false,
+                false,
+                true,
+                HeadphoneSide.Left,
+                -40,
+                DateTimeOffset.UnixEpoch),
+            null);
+
+        Assert.Equal(
+            "左 80% · 右 80% · 充电盒 --",
+            DeviceSwitchToast.FormatBatteryText(status));
+    }
+
+    [Fact]
+    public void SupportedEndpointUsesHardwareIdentityInsteadOfDisplayName()
+    {
+        var endpoint = new AudioEndpointInfo(
+            "device",
+            "用户自定义名称",
+            true,
+            0.2f,
+            false,
+            "{1}.BTHENUM\\service_VID&0001004C_PID&2012\\device");
+
+        Assert.True(HeadphoneBatteryCoordinator.IsSupportedEndpoint(endpoint));
     }
 
     private static MixerSnapshot CreateSnapshot(string deviceName, float volume, bool muted) =>

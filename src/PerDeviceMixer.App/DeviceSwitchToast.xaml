@@ -38,6 +38,11 @@
                        Margin="0,4,0,0"
                        FontSize="12"
                        Foreground="#9AA2AF" />
+            <TextBlock x:Name="BatteryText"
+                       Margin="0,4,0,0"
+                       FontSize="12"
+                       Foreground="#78D9B0"
+                       Visibility="Collapsed" />
         </StackPanel>
     </Border>
 </Window>

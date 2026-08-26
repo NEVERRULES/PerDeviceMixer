@@ -11,6 +11,7 @@ namespace PerDeviceMixer.App;
 public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
 {
     private readonly MixerEngine _engine;
+    private readonly HeadphoneBatteryCoordinator _headphoneBattery;
     private readonly ApplicationController _controller;
     private readonly UpdateCoordinator _updates;
     private readonly ApplicationIconProvider _iconProvider = new();
@@ -34,6 +35,7 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
     private bool _restoreNewSessions = true;
     private bool _saveMuteState = true;
     private bool _showDeviceSwitchToast = true;
+    private bool _showSupportedHeadphoneBattery = true;
     private bool _audioDiagnosticsEnabled;
     private double _saveDebounceMilliseconds = 500;
     private bool _startWithWindows;
@@ -45,14 +47,17 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
     private bool _isDownloadingUpdate;
     private int _updateDownloadProgress;
     private UpdateReleaseInfo? _availableRelease;
+    private HeadphoneBatteryStatus _headphoneBatteryStatus = HeadphoneBatteryStatus.Inactive;
     private bool _disposed;
 
     internal MainViewModel(
         MixerEngine engine,
+        HeadphoneBatteryCoordinator headphoneBattery,
         ApplicationController controller,
         UpdateCoordinator updates)
     {
         _engine = engine;
+        _headphoneBattery = headphoneBattery;
         _controller = controller;
         _updates = updates;
         ShowMixerCommand = new RelayCommand(() => NavigateTo(AppPage.Mixer));
@@ -73,6 +78,7 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
         _engine.MixerChanged += OnMixerChanged;
         _engine.ProfileSaveStateChanged += OnProfileSaveStateChanged;
         _updates.StateChanged += OnUpdateStateChanged;
+        _headphoneBattery.StatusChanged += OnHeadphoneBatteryStatusChanged;
     }
 
     public event PropertyChangedEventHandler? PropertyChanged;
@@ -101,6 +107,27 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
     public IReadOnlyList<UpdateIntervalOption> UpdateIntervals => _updateIntervals;
     public string CurrentVersionText => _currentVersionText;
     public string InstallTypeText => _installTypeText;
+    public Visibility HeadphoneBatteryVisibility =>
+        _headphoneBatteryStatus.IsSupportedDeviceActive
+            ? Visibility.Visible
+            : Visibility.Collapsed;
+    public string HeadphoneBatteryTitle => string.IsNullOrWhiteSpace(_headphoneBatteryStatus.DeviceName)
+        ? "Beats Fit Pro"
+        : _headphoneBatteryStatus.DeviceName;
+    public string HeadphoneBatteryStateText => _headphoneBatteryStatus.ErrorMessage is not null
+        ? "耳机已连接，但暂时无法读取电量"
+        : _headphoneBatteryStatus.Battery is null
+            ? "已连接，正在等待耳机广播"
+            : "电量由耳机的本地蓝牙广播提供";
+    public string LeftHeadphoneBatteryText => FormatBatteryComponent(
+        _headphoneBatteryStatus.Battery?.LeftBatteryPercent,
+        _headphoneBatteryStatus.Battery?.LeftCharging == true);
+    public string RightHeadphoneBatteryText => FormatBatteryComponent(
+        _headphoneBatteryStatus.Battery?.RightBatteryPercent,
+        _headphoneBatteryStatus.Battery?.RightCharging == true);
+    public string CaseHeadphoneBatteryText => FormatBatteryComponent(
+        _headphoneBatteryStatus.Battery?.CaseBatteryPercent,
+        _headphoneBatteryStatus.Battery?.CaseCharging == true);
 
     private AppPage CurrentPage
     {
@@ -248,6 +275,17 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
         }
     }
 
+    public bool ShowSupportedHeadphoneBattery
+    {
+        get => _showSupportedHeadphoneBattery;
+        set
+        {
+            if (!SetField(ref _showSupportedHeadphoneBattery, value)) return;
+            SaveSetting(settings => settings.ShowSupportedHeadphoneBattery = value);
+            _headphoneBattery.Reconcile();
+        }
+    }
+
     public bool AudioDiagnosticsEnabled
     {
         get => _audioDiagnosticsEnabled;
@@ -373,6 +411,7 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
         try
         {
             LoadSettings();
+            ApplyHeadphoneBatteryStatus(_headphoneBattery.CurrentStatus);
             RefreshSnapshot();
             RefreshDevices();
             await Task.CompletedTask;
@@ -396,6 +435,7 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
         _restoreNewSessions = settings.RestoreNewSessions;
         _saveMuteState = settings.SaveMuteState;
         _showDeviceSwitchToast = settings.ShowDeviceSwitchToast;
+        _showSupportedHeadphoneBattery = settings.ShowSupportedHeadphoneBattery;
         _audioDiagnosticsEnabled = settings.AudioDiagnosticsEnabled;
         _saveDebounceMilliseconds = settings.SaveDebounceMilliseconds;
         _startWithWindows = StartupManager.IsEnabled;
@@ -410,6 +450,7 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
         OnPropertyChanged(nameof(RestoreNewSessions));
         OnPropertyChanged(nameof(SaveMuteState));
         OnPropertyChanged(nameof(ShowDeviceSwitchToast));
+        OnPropertyChanged(nameof(ShowSupportedHeadphoneBattery));
         OnPropertyChanged(nameof(AudioDiagnosticsEnabled));
         OnPropertyChanged(nameof(SaveDebounceMilliseconds));
         OnPropertyChanged(nameof(StartWithWindows));
@@ -463,6 +504,33 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
         var dispatcher = System.Windows.Application.Current?.Dispatcher;
         if (dispatcher is null || dispatcher.HasShutdownStarted) return;
         _ = dispatcher.BeginInvoke(() => ApplyUpdateState(eventArgs.State));
+    }
+
+    private void OnHeadphoneBatteryStatusChanged(
+        object? sender,
+        HeadphoneBatteryStatusChangedEventArgs eventArgs)
+    {
+        var dispatcher = System.Windows.Application.Current?.Dispatcher;
+        if (dispatcher is null || dispatcher.HasShutdownStarted) return;
+        _ = dispatcher.BeginInvoke(() => ApplyHeadphoneBatteryStatus(eventArgs.Status));
+    }
+
+    private void ApplyHeadphoneBatteryStatus(HeadphoneBatteryStatus status)
+    {
+        if (_disposed) return;
+        _headphoneBatteryStatus = status;
+        OnPropertyChanged(nameof(HeadphoneBatteryVisibility));
+        OnPropertyChanged(nameof(HeadphoneBatteryTitle));
+        OnPropertyChanged(nameof(HeadphoneBatteryStateText));
+        OnPropertyChanged(nameof(LeftHeadphoneBatteryText));
+        OnPropertyChanged(nameof(RightHeadphoneBatteryText));
+        OnPropertyChanged(nameof(CaseHeadphoneBatteryText));
+    }
+
+    private static string FormatBatteryComponent(int? percent, bool charging)
+    {
+        var value = percent.HasValue ? $"{percent.Value}%" : "--";
+        return percent.HasValue && charging ? value + " · 充电中" : value;
     }
 
     private void ApplyUpdateState(UpdateState state)
@@ -772,6 +840,7 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
         _engine.MixerChanged -= OnMixerChanged;
         _engine.ProfileSaveStateChanged -= OnProfileSaveStateChanged;
         _updates.StateChanged -= OnUpdateStateChanged;
+        _headphoneBattery.StatusChanged -= OnHeadphoneBatteryStatusChanged;
         Applications.Clear();
         OutputDevices.Clear();
         InputDevices.Clear();

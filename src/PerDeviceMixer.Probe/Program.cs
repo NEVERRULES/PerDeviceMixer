@@ -1,5 +1,56 @@
 using PerDeviceMixer.Audio;
+using PerDeviceMixer.Bluetooth;
 using PerDeviceMixer.Core;
+
+var beatsBatteryIndex = Array.FindIndex(
+    args,
+    argument => string.Equals(argument, "--beats-battery", StringComparison.OrdinalIgnoreCase));
+if (beatsBatteryIndex >= 0)
+{
+    var durationSeconds = beatsBatteryIndex + 1 < args.Length &&
+                          int.TryParse(args[beatsBatteryIndex + 1], out var parsedDuration)
+        ? Math.Clamp(parsedDuration, 5, 300)
+        : 20;
+    Console.OutputEncoding = System.Text.Encoding.UTF8;
+    using var monitor = new AppleHeadphoneBatteryMonitor();
+    using var cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(durationSeconds));
+    Console.CancelKeyPress += (_, eventArgs) =>
+    {
+        eventArgs.Cancel = true;
+        cancellation.Cancel();
+    };
+    monitor.StateChanged += (_, eventArgs) =>
+    {
+        var state = eventArgs.State;
+        if (state is null)
+        {
+            Console.WriteLine($"[{DateTime.Now:T}] Beats Fit Pro broadcast expired.");
+            return;
+        }
+
+        static string Format(int? value, bool charging) =>
+            (value.HasValue ? $"{value.Value}%" : "--") + (charging ? " charging" : string.Empty);
+        Console.WriteLine(
+            $"[{DateTime.Now:T}] L {Format(state.LeftBatteryPercent, state.LeftCharging)} | " +
+            $"R {Format(state.RightBatteryPercent, state.RightCharging)} | " +
+            $"Case {Format(state.CaseBatteryPercent, state.CaseCharging)} | " +
+            $"RSSI {state.SignalStrengthDbm} dBm | broadcaster {state.BroadcastingSide}");
+    };
+    monitor.MonitoringFailed += (_, eventArgs) =>
+        Console.Error.WriteLine($"Bluetooth monitor failed: {eventArgs.Exception.GetType().Name}");
+
+    Console.WriteLine($"Watching Beats Fit Pro battery broadcasts for {durationSeconds} seconds.");
+    monitor.Start(AppleHeadphoneIds.BeatsFitProProductId);
+    try
+    {
+        await Task.Delay(Timeout.InfiniteTimeSpan, cancellation.Token);
+    }
+    catch (OperationCanceledException) when (cancellation.IsCancellationRequested)
+    {
+    }
+
+    return;
+}
 
 var stressVolumeIndex = Array.FindIndex(
     args,
@@ -79,6 +130,7 @@ foreach (var device in devices)
     var marker = device.IsDefault ? "*" : " ";
     Console.WriteLine($"{marker} {device.Name}");
     Console.WriteLine($"  ID: {device.Id}");
+    Console.WriteLine($"  Hardware: {device.HardwareInstanceId ?? "unknown"}");
     Console.WriteLine($"  Master: {device.MasterVolume:P0}  Muted: {device.IsMuted}");
 }
 

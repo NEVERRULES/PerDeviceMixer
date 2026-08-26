@@ -103,6 +103,28 @@ public sealed class JsonProfileStoreTests
         Assert.True(loaded.Settings.ShowDeviceSwitchToast);
     }
 
+    [Fact]
+    public async Task LoadAsyncDefaultsSupportedHeadphoneBatteryToEnabledForLegacySettings()
+    {
+        using var directory = new TemporaryDirectory();
+        var path = Path.Combine(directory.Path, "profiles.json");
+        await File.WriteAllTextAsync(
+            path,
+            """
+            {
+              "SchemaVersion": 2,
+              "Settings": {
+                "AutoLearn": true
+              },
+              "Devices": {}
+            }
+            """);
+
+        var loaded = await new JsonProfileStore(path).LoadAsync();
+
+        Assert.True(loaded.Settings.ShowSupportedHeadphoneBattery);
+    }
+
     private static MixerProfileDocument CreateDocument()
     {
         var document = new MixerProfileDocument();

@@ -1,6 +1,7 @@
 using System.Windows;
 using System.Windows.Threading;
 using PerDeviceMixer.Audio;
+using PerDeviceMixer.Bluetooth;
 using PerDeviceMixer.Core;
 
 namespace PerDeviceMixer.App;
@@ -8,10 +9,8 @@ namespace PerDeviceMixer.App;
 internal sealed class ApplicationController : IDisposable
 {
     private readonly App _application;
-    private readonly MixerEngine _engine = new(
-        new CoreAudioService(),
-        new JsonProfileStore(),
-        new LocalAudioDiagnosticLog());
+    private readonly MixerEngine _engine;
+    private readonly HeadphoneBatteryCoordinator _headphoneBattery;
     private readonly UpdateCoordinator _updates;
     private TrayIconService? _trayIcon;
     private DeviceSwitchToast? _deviceSwitchToast;
@@ -25,6 +24,13 @@ internal sealed class ApplicationController : IDisposable
     public ApplicationController(App application)
     {
         _application = application;
+        _engine = new MixerEngine(
+            new CoreAudioService(),
+            new JsonProfileStore(),
+            new LocalAudioDiagnosticLog());
+        _headphoneBattery = new HeadphoneBatteryCoordinator(
+            _engine,
+            new AppleHeadphoneBatteryMonitor());
         _updates = new UpdateCoordinator(_engine, new GitHubUpdateService());
     }
 
@@ -33,8 +39,9 @@ internal sealed class ApplicationController : IDisposable
     public async Task InitializeAsync(CancellationToken cancellationToken = default)
     {
         await _engine.InitializeAsync(cancellationToken);
-        _deviceSwitchToast = new DeviceSwitchToast(_engine);
-        _trayIcon = new TrayIconService(_engine);
+        _headphoneBattery.Start();
+        _deviceSwitchToast = new DeviceSwitchToast(_engine, _headphoneBattery);
+        _trayIcon = new TrayIconService(_engine, _headphoneBattery);
         _trayIcon.ShowRequested += OnShowRequested;
         _trayIcon.ExitRequested += OnExitRequested;
         _trayIcon.ProjectRequested += OnProjectRequested;
@@ -56,7 +63,7 @@ internal sealed class ApplicationController : IDisposable
         }
 
         EnsureWindowResources();
-        _window = new MainWindow(this, _engine, _updates);
+        _window = new MainWindow(this, _engine, _headphoneBattery, _updates);
         _application.MainWindow = _window;
         _window.Show();
     }
@@ -362,6 +369,7 @@ internal sealed class ApplicationController : IDisposable
 
         _updates.StateChanged -= OnUpdateStateChanged;
         _updates.Dispose();
+        _headphoneBattery.Dispose();
         ReleaseWindowResources();
 
         try

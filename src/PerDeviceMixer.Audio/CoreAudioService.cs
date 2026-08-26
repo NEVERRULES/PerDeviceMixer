@@ -6,6 +6,9 @@ namespace PerDeviceMixer.Audio;
 
 public sealed class CoreAudioService : IAudioService
 {
+    private static readonly PropertyKey DeviceParentPropertyKey = new(
+        new Guid("B3F8FA53-0004-438E-9003-51A46E139BFC"),
+        2);
     private static readonly Guid EventContext = new("F464F931-E6D8-42F4-9BF1-4BC2DF2D08A8");
     private const int MaximumSuppressedApplications = 256;
 
@@ -216,7 +219,22 @@ public sealed class CoreAudioService : IAudioService
             string.IsNullOrWhiteSpace(device.FriendlyName) ? device.DeviceFriendlyName : device.FriendlyName,
             isDefault,
             Math.Clamp(endpointVolume.MasterVolumeLevelScalar, 0f, 1f),
-            endpointVolume.Mute);
+            endpointVolume.Mute,
+            GetHardwareInstanceId(device));
+    }
+
+    private static string? GetHardwareInstanceId(MMDevice device)
+    {
+        try
+        {
+            var value = device.Properties[DeviceParentPropertyKey].Value as string;
+            return string.IsNullOrWhiteSpace(value) ? null : value;
+        }
+        catch
+        {
+            // Not every endpoint exposes a Plug and Play parent property.
+            return null;
+        }
     }
 
     private static List<AudioSessionInfo> EnumerateSessions(MMDevice device)
@@ -361,7 +379,8 @@ public sealed class CoreAudioService : IAudioService
         string? applicationKey = null,
         float? volume = null,
         bool? isMuted = null,
-        string? deviceId = null) =>
+        string? deviceId = null,
+        AudioDeviceDirection? deviceDirection = null) =>
         StateChanged?.Invoke(
             this,
             new AudioStateChangedEventArgs(
@@ -369,7 +388,33 @@ public sealed class CoreAudioService : IAudioService
                 deviceId ?? _currentDeviceId,
                 applicationKey,
                 volume,
-                isMuted));
+                isMuted,
+                deviceDirection));
+
+    private void HandleDeviceCollectionChangedCore(string deviceId)
+    {
+        AudioDeviceDirection? direction = null;
+        try
+        {
+            using var device = Enumerator.GetDevice(deviceId);
+            direction = device.DataFlow switch
+            {
+                DataFlow.Render => AudioDeviceDirection.Output,
+                DataFlow.Capture => AudioDeviceDirection.Input,
+                _ => null
+            };
+        }
+        catch
+        {
+            // A removed endpoint cannot always be queried. Keep its direction unknown so
+            // the Core priority stack can still remove a previously active render device.
+        }
+
+        RaiseStateChanged(
+            AudioChangeKind.DeviceCollection,
+            deviceId: deviceId,
+            deviceDirection: direction);
+    }
 
     private void SuppressApplicationEvents(string applicationKey)
     {
@@ -482,19 +527,13 @@ public sealed class CoreAudioService : IAudioService
     private sealed class DeviceNotificationClient(CoreAudioService owner) : IMMNotificationClient
     {
         public void OnDeviceStateChanged(string deviceId, DeviceState newState) =>
-            owner._dispatcher.Post(() => owner.RaiseStateChanged(
-                AudioChangeKind.DeviceCollection,
-                deviceId: deviceId));
+            owner._dispatcher.Post(() => owner.HandleDeviceCollectionChangedCore(deviceId));
 
         public void OnDeviceAdded(string pwstrDeviceId) =>
-            owner._dispatcher.Post(() => owner.RaiseStateChanged(
-                AudioChangeKind.DeviceCollection,
-                deviceId: pwstrDeviceId));
+            owner._dispatcher.Post(() => owner.HandleDeviceCollectionChangedCore(pwstrDeviceId));
 
         public void OnDeviceRemoved(string deviceId) =>
-            owner._dispatcher.Post(() => owner.RaiseStateChanged(
-                AudioChangeKind.DeviceCollection,
-                deviceId: deviceId));
+            owner._dispatcher.Post(() => owner.HandleDeviceCollectionChangedCore(deviceId));
 
         public void OnDefaultDeviceChanged(DataFlow flow, Role role, string defaultDeviceId)
         {

@@ -31,11 +31,14 @@ internal sealed class TrayIconService : IDisposable
     private const int MaximumToolTipLength = 127;
 
     private readonly MixerEngine _engine;
+    private readonly HeadphoneBatteryCoordinator _headphoneBattery;
+    private readonly HeadphoneLowBatteryReminder _lowBatteryReminder = new();
     private readonly HwndSource _messageWindow;
     private readonly uint _taskbarCreatedMessage;
     private ContextMenu? _menu;
     private MenuItem? _muteItem;
     private MenuItem? _outputDevicesItem;
+    private MenuItem? _batteryItem;
     private MenuItem? _checkUpdatesItem;
     private string? _updateVersion;
     private string _toolTip = "PerDeviceMixer";
@@ -43,9 +46,12 @@ internal sealed class TrayIconService : IDisposable
     private int _toolTipRefreshPending;
     private bool _disposed;
 
-    public TrayIconService(MixerEngine engine)
+    public TrayIconService(
+        MixerEngine engine,
+        HeadphoneBatteryCoordinator headphoneBattery)
     {
         _engine = engine;
+        _headphoneBattery = headphoneBattery;
         _messageWindow = new HwndSource(new HwndSourceParameters("PerDeviceMixer.TrayMessages")
         {
             Width = 0,
@@ -58,6 +64,7 @@ internal sealed class TrayIconService : IDisposable
             ?? (Icon)SystemIcons.Application.Clone();
 
         _engine.MixerChanged += OnMixerChanged;
+        _headphoneBattery.StatusChanged += OnHeadphoneBatteryStatusChanged;
         _toolTip = GetCurrentToolTip();
         AddIcon();
     }
@@ -89,6 +96,17 @@ internal sealed class TrayIconService : IDisposable
         _ = ShellNotifyIcon(NotifyIconModify, ref data);
     }
 
+    private void ShowLowBatteryNotification(HeadphoneLowBatteryAlert alert)
+    {
+        if (_disposed || _icon is null) return;
+        var data = CreateNotifyIconData();
+        data.Flags = NotifyIconInfo;
+        data.InfoTitle = alert.Title;
+        data.Info = alert.Message;
+        data.InfoFlags = NotifyIconInfoFlag;
+        _ = ShellNotifyIcon(NotifyIconModify, ref data);
+    }
+
     private static MenuItem CreateItem(string header, RoutedEventHandler click)
     {
         var item = new MenuItem { Header = header };
@@ -103,6 +121,17 @@ internal sealed class TrayIconService : IDisposable
         {
             var snapshot = _engine.GetCurrentSnapshot();
             _muteItem.Header = snapshot?.Endpoint.IsMuted == true ? "取消静音" : "静音";
+            if (_batteryItem is not null)
+            {
+                var batteryText = DeviceSwitchToast.FormatBatteryText(
+                    _headphoneBattery.CurrentStatus);
+                _batteryItem.Header = string.IsNullOrWhiteSpace(batteryText)
+                    ? "正在读取耳机电量…"
+                    : batteryText;
+                _batteryItem.Visibility = _headphoneBattery.CurrentStatus.IsSupportedDeviceActive
+                    ? Visibility.Visible
+                    : Visibility.Collapsed;
+            }
 
             _outputDevicesItem.Items.Clear();
             foreach (var device in _engine.GetDevices())
@@ -154,6 +183,25 @@ internal sealed class TrayIconService : IDisposable
         ScheduleToolTipRefresh();
     }
 
+    private void OnHeadphoneBatteryStatusChanged(
+        object? sender,
+        HeadphoneBatteryStatusChangedEventArgs eventArgs)
+    {
+        ScheduleToolTipRefresh();
+        if (_disposed) return;
+        var status = eventArgs.Status;
+        var dispatcher = _messageWindow.Dispatcher;
+        if (dispatcher.HasShutdownStarted) return;
+        _ = dispatcher.BeginInvoke(
+            DispatcherPriority.Background,
+            new Action(() =>
+            {
+                if (_disposed) return;
+                var alert = _lowBatteryReminder.Evaluate(status);
+                if (alert is not null) ShowLowBatteryNotification(alert);
+            }));
+    }
+
     private void ScheduleToolTipRefresh()
     {
         if (_disposed || Interlocked.Exchange(ref _toolTipRefreshPending, 1) != 0) return;
@@ -189,7 +237,7 @@ internal sealed class TrayIconService : IDisposable
     {
         try
         {
-            return FormatToolTip(_engine.GetCurrentSnapshot());
+            return FormatToolTip(_engine.GetCurrentSnapshot(), _headphoneBattery.CurrentStatus);
         }
         catch
         {
@@ -197,7 +245,9 @@ internal sealed class TrayIconService : IDisposable
         }
     }
 
-    internal static string FormatToolTip(MixerSnapshot? snapshot)
+    internal static string FormatToolTip(
+        MixerSnapshot? snapshot,
+        HeadphoneBatteryStatus? headphoneStatus = null)
     {
         if (snapshot is null) return "PerDeviceMixer\n暂无可用输出设备";
 
@@ -213,13 +263,22 @@ internal sealed class TrayIconService : IDisposable
         var status = snapshot.Endpoint.IsMuted
             ? $"主音量 {volume}% · 已静音"
             : $"主音量 {volume}%";
-        var maximumDeviceNameLength = MaximumToolTipLength - status.Length - 1;
+        var battery = headphoneStatus is null
+            ? string.Empty
+            : DeviceSwitchToast.FormatBatteryText(headphoneStatus);
+        var fixedLength = status.Length + 1;
+        if (!string.IsNullOrWhiteSpace(battery)) fixedLength += battery.Length + 1;
+        var maximumDeviceNameLength = Math.Max(1, MaximumToolTipLength - fixedLength);
         if (deviceName.Length > maximumDeviceNameLength)
         {
-            deviceName = deviceName[..(maximumDeviceNameLength - 1)] + "…";
+            deviceName = maximumDeviceNameLength == 1
+                ? "…"
+                : deviceName[..(maximumDeviceNameLength - 1)] + "…";
         }
 
-        return $"{deviceName}\n{status}";
+        return string.IsNullOrWhiteSpace(battery)
+            ? $"{deviceName}\n{status}"
+            : $"{deviceName}\n{status}\n{battery}";
     }
 
     private void ToggleMasterMute()
@@ -257,6 +316,12 @@ internal sealed class TrayIconService : IDisposable
 
         var openItem = CreateItem("打开音量控制", (_, _) => ShowRequested?.Invoke(this, EventArgs.Empty));
         _muteItem = CreateItem("静音", (_, _) => ToggleMasterMute());
+        _batteryItem = new MenuItem
+        {
+            Header = "正在读取耳机电量…",
+            IsEnabled = false,
+            Visibility = Visibility.Collapsed
+        };
         _outputDevicesItem = new MenuItem { Header = "输出设备" };
         _checkUpdatesItem = CreateItem(
             string.IsNullOrWhiteSpace(_updateVersion) ? "检查更新" : $"发现新版本 {_updateVersion}",
@@ -267,6 +332,7 @@ internal sealed class TrayIconService : IDisposable
 
         menu.Items.Add(openItem);
         menu.Items.Add(new Separator());
+        menu.Items.Add(_batteryItem);
         menu.Items.Add(_muteItem);
         menu.Items.Add(_outputDevicesItem);
         menu.Items.Add(new Separator());
@@ -288,6 +354,7 @@ internal sealed class TrayIconService : IDisposable
         menu.Resources.Clear();
         _menu = null;
         _muteItem = null;
+        _batteryItem = null;
         _outputDevicesItem = null;
         _checkUpdatesItem = null;
         MenuClosed?.Invoke(this, EventArgs.Empty);
@@ -353,6 +420,7 @@ internal sealed class TrayIconService : IDisposable
         if (_disposed) return;
         _disposed = true;
         _engine.MixerChanged -= OnMixerChanged;
+        _headphoneBattery.StatusChanged -= OnHeadphoneBatteryStatusChanged;
         if (_menu is not null)
         {
             var menu = _menu;
@@ -364,6 +432,7 @@ internal sealed class TrayIconService : IDisposable
             menu.Resources.MergedDictionaries.Clear();
             menu.Resources.Clear();
             _muteItem = null;
+            _batteryItem = null;
             _outputDevicesItem = null;
             _checkUpdatesItem = null;
         }

@@ -67,6 +67,19 @@
                         <CheckBox Grid.Column="1" Style="{StaticResource SwitchStyle}" IsChecked="{Binding ShowDeviceSwitchToast}" />
                     </Grid>
                 </Border>
+                <Border Style="{StaticResource SettingRowStyle}">
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <StackPanel>
+                            <TextBlock FontWeight="SemiBold" Text="支持耳机的电量" />
+                            <TextBlock Margin="0,3,0,0" Foreground="{StaticResource MutedBrush}" FontSize="12" Text="连接 Beats Fit Pro 时在设备页、托盘和切换提示中显示本地读取的电量" />
+                        </StackPanel>
+                        <CheckBox Grid.Column="1" Style="{StaticResource SwitchStyle}" IsChecked="{Binding ShowSupportedHeadphoneBattery}" />
+                    </Grid>
+                </Border>
             </StackPanel>
         </Border>
 

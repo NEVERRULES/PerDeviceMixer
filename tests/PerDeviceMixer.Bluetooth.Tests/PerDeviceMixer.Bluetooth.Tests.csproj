@@ -5,7 +5,6 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <IsPackable>false</IsPackable>
-    <UseWPF>true</UseWPF>
     <TestingPlatformDotnetTestSupport>false</TestingPlatformDotnetTestSupport>
   </PropertyGroup>
 
@@ -24,7 +23,7 @@
   </ItemGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\..\src\PerDeviceMixer.App\PerDeviceMixer.App.csproj" />
+    <ProjectReference Include="..\..\src\PerDeviceMixer.Bluetooth\PerDeviceMixer.Bluetooth.csproj" />
   </ItemGroup>
 
 </Project>

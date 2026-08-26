@@ -5,7 +5,8 @@ public sealed record AudioEndpointInfo(
     string Name,
     bool IsDefault,
     float MasterVolume,
-    bool IsMuted);
+    bool IsMuted,
+    string? HardwareInstanceId = null);
 
 public sealed record AudioSessionInfo(
     string SessionId,
@@ -43,13 +44,15 @@ public sealed class AudioStateChangedEventArgs(
     string? deviceId = null,
     string? applicationKey = null,
     float? volume = null,
-    bool? isMuted = null) : EventArgs
+    bool? isMuted = null,
+    AudioDeviceDirection? deviceDirection = null) : EventArgs
 {
     public AudioChangeKind Kind { get; } = kind;
     public string? DeviceId { get; } = deviceId;
     public string? ApplicationKey { get; } = applicationKey;
     public float? Volume { get; } = volume;
     public bool? IsMuted { get; } = isMuted;
+    public AudioDeviceDirection? DeviceDirection { get; } = deviceDirection;
 }
 
 public interface IAudioService : IDisposable

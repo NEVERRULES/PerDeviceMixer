@@ -15,11 +15,12 @@ public partial class MainWindow : Window, IDisposable
     internal MainWindow(
         ApplicationController controller,
         MixerEngine engine,
+        HeadphoneBatteryCoordinator headphoneBattery,
         UpdateCoordinator updates)
     {
         _controller = controller;
         _engine = engine;
-        _viewModel = new MainViewModel(engine, controller, updates);
+        _viewModel = new MainViewModel(engine, headphoneBattery, controller, updates);
         InitializeComponent();
         DataContext = _viewModel;
         Loaded += OnLoaded;
