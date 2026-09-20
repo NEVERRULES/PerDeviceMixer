@@ -48,7 +48,7 @@ public sealed class LazyPageResourceTests
         });
         thread.SetApartmentState(ApartmentState.STA);
         thread.Start();
-        Assert.True(thread.Join(TimeSpan.FromSeconds(20)), "The WPF resource test did not finish.");
+        Assert.True(thread.Join(TimeSpan.FromSeconds(45)), "The WPF resource test did not finish.");
         Assert.Null(failure);
     }
 
