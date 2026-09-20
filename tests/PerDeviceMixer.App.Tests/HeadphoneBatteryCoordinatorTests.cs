@@ -66,6 +66,66 @@ public sealed class HeadphoneBatteryCoordinatorTests
         Assert.Equal(battery, coordinator.CurrentStatus.Battery);
     }
 
+    internal static void VerifyToastWindowLifecycle(System.Windows.Application application)
+    {
+        using var engine = CreateEngine(null);
+        using var battery = new HeadphoneBatteryCoordinator(engine, new FakeHeadphoneBatteryMonitor());
+        using var toast = new DeviceSwitchToast(engine, battery);
+        Assert.Empty(application.Windows.Cast<System.Windows.Window>());
+        var dismissed = 0;
+        toast.Dismissed += (_, _) => dismissed++;
+        for (var cycle = 0; cycle < 2; cycle++)
+        {
+            toast.ShowToast(engine.GetCurrentSnapshot()!);
+            Assert.Single(application.Windows.Cast<DeviceSwitchToastWindow>());
+            PumpDispatcher(TimeSpan.FromSeconds(3.5));
+            Assert.Empty(application.Windows.Cast<System.Windows.Window>());
+            Assert.Null(application.MainWindow);
+            Assert.Equal(cycle + 1, dismissed);
+        }
+
+        var monitor = new FakeHeadphoneBatteryMonitor();
+        using var supportedEngine = CreateEngine(BeatsHardwareId);
+        using var supportedBattery = new HeadphoneBatteryCoordinator(supportedEngine, monitor);
+        supportedBattery.Start();
+        using var supportedToast = new DeviceSwitchToast(supportedEngine, supportedBattery);
+        supportedToast.ShowToast(supportedEngine.GetCurrentSnapshot()!);
+        var window = Assert.Single(application.Windows.Cast<DeviceSwitchToastWindow>());
+        Assert.Equal("正在读取耳机电量…", window.BatteryText.Text);
+
+        PumpDispatcher(TimeSpan.FromSeconds(3.5));
+
+        Assert.Same(window, Assert.Single(application.Windows.Cast<DeviceSwitchToastWindow>()));
+        monitor.Publish(new HeadphoneBatteryState(
+            AppleHeadphoneIds.BeatsFitProProductId,
+            "Beats Fit Pro",
+            90,
+            90,
+            null,
+            false,
+            false,
+            false,
+            HeadphoneSide.Left,
+            -40,
+            DateTimeOffset.UnixEpoch));
+        PumpDispatcher(TimeSpan.FromMilliseconds(100));
+        Assert.Equal("左 90% · 右 90% · 充电盒 --", window.BatteryText.Text);
+
+        PumpDispatcher(TimeSpan.FromSeconds(3));
+
+        Assert.Empty(application.Windows.Cast<System.Windows.Window>());
+        Assert.Null(application.MainWindow);
+    }
+
+    private static void PumpDispatcher(TimeSpan duration)
+    {
+        var frame = new System.Windows.Threading.DispatcherFrame();
+        var timer = new System.Windows.Threading.DispatcherTimer { Interval = duration };
+        timer.Tick += (_, _) => { timer.Stop(); frame.Continue = false; };
+        timer.Start();
+        System.Windows.Threading.Dispatcher.PushFrame(frame);
+    }
+
     private static MixerEngine CreateEngine(string? hardwareInstanceId)
     {
         var endpoint = new AudioEndpointInfo(

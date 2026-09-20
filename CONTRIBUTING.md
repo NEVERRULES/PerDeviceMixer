@@ -110,6 +110,26 @@ dotnet test PerDeviceMixer.slnx -c Debug --collect:"XPlat Code Coverage" --resul
 
 输出位于 `artifacts\release\<version>\assets`，该目录被 Git 忽略。
 
+默认发布流程：
+
+1. 更新 `Directory.Build.props` 及相关版本文档并提交；
+2. 推送与源码版本完全一致的标签，例如 `v0.5.0-preview.3`；
+3. `.github/workflows/release.yml` 在 GitHub Windows runner 上运行格式检查、Release 构建和测试，再生成安装程序、便携包及校验清单；
+4. 三项资产先上传到草稿 Release，GitHub SHA-256 与构建产物逐项一致后才公开。预览版本自动标记为 Pre-release。
+
+标签与 `Directory.Build.props` 不一致、构建/测试失败、上传失败或哈希不一致都会停止发布；GitHub runner 随任务销毁，因此开发电脑无需保留发布产物。
+
+需要在本机备用发布时，确保最终版本已提交、工作区干净且 `gh auth status` 成功，再使用：
+
+```powershell
+.\publish-github-release.ps1
+```
+
+本地脚本会调用 `build-distribution.ps1`，创建预发布 GitHub Release，逐个核对远端资产的
+SHA-256；全部一致后清理 `artifacts\release` 中的旧版本，仅保留当前版本。上传或远端
+校验失败时不会清理本地资产。正式版使用 `-Stable`，需要保留旧目录时使用
+`-KeepOlderLocalVersions`。
+
 发布前验证：
 
 - 所有自动化测试通过；
@@ -126,6 +146,7 @@ dotnet test PerDeviceMixer.slnx -c Debug --collect:"XPlat Code Coverage" --resul
 - `Directory.Build.props` 中的版本；
 - README 顶部版本和下载说明；
 - `build-distribution.ps1` 默认版本；
+- `publish-github-release.ps1` 的目标提交、预发布/正式版参数和远端资产校验结果；
 - `installer/PerDeviceMixer.iss` 的回退版本；
 - `docs/DEVELOPMENT_STATUS.md` 的版本、commit 和验证结果；
 - Git 标签、Release 标题和预发布/正式版状态。

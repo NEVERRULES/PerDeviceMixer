@@ -464,7 +464,7 @@ public sealed class MixerEngineTests
     }
 
     [Fact]
-    public async Task AudioEventsAreProcessedInArrivalOrder()
+    public async Task CoalescedVolumeEventsPreserveOrderAndFinalValue()
     {
         using var directory = new TemporaryDirectory();
         var store = new JsonProfileStore(Path.Combine(directory.Path, "profiles.json"));
@@ -478,7 +478,7 @@ public sealed class MixerEngineTests
         {
             if (eventArgs.Kind != AudioChangeKind.MasterVolume || !eventArgs.Volume.HasValue) return;
             observedVolumes.Add(eventArgs.Volume.Value);
-            if (observedVolumes.Count == 3) completed.TrySetResult();
+            if (eventArgs.Volume == 0.33f) completed.TrySetResult();
         };
 
         audio.RaiseMasterVolumeChanged(0.11f, false);
@@ -487,9 +487,74 @@ public sealed class MixerEngineTests
 
         await completed.Task.WaitAsync(TimeSpan.FromSeconds(3));
 
-        Assert.Equal([0.11f, 0.22f, 0.33f], observedVolumes);
+        Assert.Equal(observedVolumes.OrderBy(value => value), observedVolumes);
+        Assert.Equal(0.33f, observedVolumes.Last());
         Assert.Equal(0.33f, engine.Profiles.Devices["device-new"].MasterVolume);
         Assert.True(engine.Profiles.Devices["device-new"].MasterMuted);
+    }
+
+    [Fact]
+    public async Task VolumeBurstDoesNotDropDeviceNotificationOrCrossLifecycleBoundary()
+    {
+        using var directory = new TemporaryDirectory();
+        var audio = new FakeAudioService(CreateSnapshot("speakers", 0.42f, 0.67f));
+        using var engine = new MixerEngine(audio, new JsonProfileStore(Path.Combine(directory.Path, "profiles.json")));
+        await engine.InitializeAsync();
+        using var release = new ManualResetEventSlim();
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var completed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var observed = new List<string>();
+        engine.MixerChanged += (_, args) =>
+        {
+            if (args.Kind == AudioChangeKind.MasterVolume && args.Volume == 0.01f)
+            {
+                entered.TrySetResult();
+                release.Wait(TimeSpan.FromSeconds(5));
+            }
+            else if (args.Kind == AudioChangeKind.MasterVolume)
+            {
+                observed.Add(args.Volume == 0.8f ? "before" : "after");
+                if (args.Volume == 0.9f) completed.TrySetResult();
+            }
+            else if (args.Kind == AudioChangeKind.DeviceCollection)
+            {
+                observed.Add("device");
+            }
+        };
+
+        audio.RaiseMasterVolumeChanged(0.01f, false);
+        try
+        {
+            await entered.Task.WaitAsync(TimeSpan.FromSeconds(3));
+            for (var index = 0; index < 1000; index++) audio.RaiseMasterVolumeChanged(0.8f, false);
+            audio.RaiseCaptureDeviceCollectionChanged("microphone");
+            audio.RaiseMasterVolumeChanged(0.9f, true);
+        }
+        finally
+        {
+            release.Set();
+        }
+
+        await completed.Task.WaitAsync(TimeSpan.FromSeconds(3));
+        Assert.Equal(["before", "device", "after"], observed);
+        Assert.Equal(0.9f, engine.Profiles.Devices["speakers"].MasterVolume);
+    }
+
+    [Fact]
+    public async Task DuplicateNotificationForOlderDeviceDoesNotStealOutput()
+    {
+        using var directory = new TemporaryDirectory();
+        var audio = new FakeAudioService(CreateSnapshot("speakers", 0.42f, 0.67f));
+        using var engine = new MixerEngine(audio, new JsonProfileStore(Path.Combine(directory.Path, "profiles.json")));
+        await engine.InitializeAsync();
+        audio.ConnectRenderDevice("wired", "Wired");
+        await WaitUntilAsync(() => Task.FromResult(audio.GetDefaultRenderDeviceId() == "wired"));
+        audio.ConnectRenderDevice("bluetooth", "Bluetooth");
+        await WaitUntilAsync(() => Task.FromResult(audio.GetDefaultRenderDeviceId() == "bluetooth"));
+        var reads = audio.RenderDeviceReadCount;
+        audio.RaiseDeviceCollectionChanged("wired");
+        await WaitUntilAsync(() => Task.FromResult(audio.RenderDeviceReadCount > reads));
+        Assert.Equal("bluetooth", audio.GetDefaultRenderDeviceId());
     }
 
     [Fact]

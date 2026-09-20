@@ -15,8 +15,16 @@ public sealed class MixerEngine : IDisposable
     private readonly IProfileStore profileStore;
     private readonly SemaphoreSlim _operationLock = new(1, 1);
     private readonly IAudioDiagnosticSink? _diagnostics;
-    private readonly Channel<AudioStateChangedEventArgs> _audioEvents =
-        Channel.CreateBounded<AudioStateChangedEventArgs>(new BoundedChannelOptions(256)
+    private readonly object _pendingVolumeGate = new();
+    private sealed class PendingAudioEvent(AudioStateChangedEventArgs args)
+    {
+        public AudioStateChangedEventArgs Args { get; set; } = args;
+    }
+
+    private PendingAudioEvent? _lastPendingAudioEvent;
+    private int _pendingVolumeCount;
+    private readonly Channel<PendingAudioEvent> _audioEvents =
+        Channel.CreateBounded<PendingAudioEvent>(new BoundedChannelOptions(256)
         {
             FullMode = BoundedChannelFullMode.Wait,
             SingleReader = true,
@@ -329,11 +337,33 @@ public sealed class MixerEngine : IDisposable
     private void OnAudioStateChanged(object? sender, AudioStateChangedEventArgs args)
     {
         if (_disposed) return;
-        if (!_audioEvents.Writer.TryWrite(args))
+        lock (_pendingVolumeGate)
         {
-            RecordDiagnostic(args, "queue-full");
+            var isVolume = IsVolumeNotification(args);
+            var previous = _lastPendingAudioEvent?.Args;
+            if (isVolume && previous is not null && previous.Kind == args.Kind &&
+                previous.DeviceId == args.DeviceId && previous.ApplicationKey == args.ApplicationKey)
+            {
+                _lastPendingAudioEvent!.Args = args;
+                return;
+            }
+
+            // Reserve capacity for lifecycle events. Coalesce only adjacent volume events
+            // so updates never cross a device switch or session creation boundary.
+            var pending = new PendingAudioEvent(args);
+            if ((!isVolume || _pendingVolumeCount < 128) && _audioEvents.Writer.TryWrite(pending))
+            {
+                if (isVolume) _pendingVolumeCount++;
+                _lastPendingAudioEvent = pending;
+                return;
+            }
         }
+
+        RecordDiagnostic(args, "queue-full");
     }
+
+    private static bool IsVolumeNotification(AudioStateChangedEventArgs args) =>
+        args.Kind is AudioChangeKind.MasterVolume or AudioChangeKind.SessionVolume or AudioChangeKind.CaptureVolume;
 
     private async Task RunAudioEventWorkerAsync()
     {
@@ -343,8 +373,16 @@ public sealed class MixerEngine : IDisposable
         {
             while (await reader.WaitToReadAsync(cancellationToken).ConfigureAwait(false))
             {
-                while (reader.TryRead(out var args))
+                while (reader.TryRead(out var pending))
                 {
+                    AudioStateChangedEventArgs args;
+                    lock (_pendingVolumeGate)
+                    {
+                        args = pending.Args;
+                        if (IsVolumeNotification(args)) _pendingVolumeCount--;
+                        if (ReferenceEquals(_lastPendingAudioEvent, pending)) _lastPendingAudioEvent = null;
+                    }
+
                     await HandleAudioStateChangedAsync(args).ConfigureAwait(false);
                 }
             }
@@ -605,21 +643,19 @@ public sealed class MixerEngine : IDisposable
 
     private void InitializeRenderDevicePriority()
     {
-        var devices = audio.GetRenderDevices();
+        var deviceIds = audio.GetActiveRenderDeviceIds();
         var defaultDeviceId = audio.GetDefaultRenderDeviceId();
         lock (_renderDevicePriorityGate)
         {
             InitializeRenderDevicePriorityCore(
-                devices.Select(device => device.Id),
+                deviceIds,
                 defaultDeviceId);
         }
     }
 
     private bool ReconcileRenderDevicePriority(string? changedDeviceId = null)
     {
-        var devices = audio.GetRenderDevices();
-        var activeIds = devices
-            .Select(device => device.Id)
+        var activeIds = audio.GetActiveRenderDeviceIds()
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToArray();
         var defaultDeviceId = audio.GetDefaultRenderDeviceId();
@@ -672,7 +708,8 @@ public sealed class MixerEngine : IDisposable
                     _renderDevicePriority.Add(id);
                 }
 
-                if (changedDeviceId is not null && nextActiveIds.Contains(changedDeviceId))
+                if (changedDeviceId is not null &&
+                    addedIds.Contains(changedDeviceId, StringComparer.OrdinalIgnoreCase))
                 {
                     priorityChanged |= !string.Equals(
                         _renderDevicePriority.LastOrDefault(),

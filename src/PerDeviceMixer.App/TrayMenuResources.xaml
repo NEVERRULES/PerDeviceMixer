@@ -1,18 +1,21 @@
 <ResourceDictionary xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
                     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
-    <SolidColorBrush x:Key="TraySurfaceBrush" Color="#171A20" />
-    <SolidColorBrush x:Key="TraySurfaceHoverBrush" Color="#253039" />
-    <SolidColorBrush x:Key="TrayBorderBrush" Color="#343A46" />
+    <SolidColorBrush x:Key="TraySurfaceBrush" Color="#191C22" />
+    <SolidColorBrush x:Key="TraySurfaceHoverBrush" Color="#252A33" />
+    <SolidColorBrush x:Key="TrayBorderBrush" Color="#3A4049" />
     <SolidColorBrush x:Key="TrayTextBrush" Color="#F3F4F6" />
-    <SolidColorBrush x:Key="TrayMutedBrush" Color="#9CA3AF" />
-    <SolidColorBrush x:Key="TrayAccentBrush" Color="#3DD6C6" />
+    <SolidColorBrush x:Key="TrayMutedBrush" Color="#9AA2AF" />
+    <SolidColorBrush x:Key="TrayAccentBrush" Color="#4CC2FF" />
 
     <Style TargetType="MenuItem">
         <Setter Property="Foreground" Value="{StaticResource TrayTextBrush}" />
         <Setter Property="Background" Value="Transparent" />
-        <Setter Property="FontFamily" Value="Segoe UI" />
+        <Setter Property="FontFamily" Value="Segoe UI Variable Text, Segoe UI" />
         <Setter Property="FontSize" Value="13" />
-        <Setter Property="Padding" Value="10,7" />
+        <Setter Property="MinHeight" Value="32" />
+        <Setter Property="Padding" Value="8,6" />
+        <Setter Property="SnapsToDevicePixels" Value="True" />
+        <Setter Property="UseLayoutRounding" Value="True" />
         <Setter Property="Template">
             <Setter.Value>
                 <ControlTemplate TargetType="MenuItem">
@@ -24,9 +27,9 @@
                                 Background="{TemplateBinding Background}">
                             <Grid>
                                 <Grid.ColumnDefinitions>
-                                    <ColumnDefinition Width="18" />
-                                    <ColumnDefinition Width="*" />
                                     <ColumnDefinition Width="16" />
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="14" />
                                 </Grid.ColumnDefinitions>
                                 <TextBlock x:Name="CheckMark"
                                            VerticalAlignment="Center"
@@ -35,7 +38,7 @@
                                            Text="✓"
                                            Visibility="Collapsed" />
                                 <ContentPresenter Grid.Column="1"
-                                                  Margin="2,0,12,0"
+                                                  Margin="2,0,10,0"
                                                   VerticalAlignment="Center"
                                                   ContentSource="Header"
                                                   RecognizesAccessKey="True" />
@@ -53,10 +56,10 @@
                                IsOpen="{Binding IsSubmenuOpen, RelativeSource={RelativeSource TemplatedParent}}"
                                Placement="Right"
                                PopupAnimation="Fade">
-                            <Border MinWidth="190"
+                            <Border MinWidth="188"
                                     Margin="3"
                                     Padding="3"
-                                    CornerRadius="8"
+                                    CornerRadius="7"
                                     Background="{StaticResource TraySurfaceBrush}"
                                     BorderBrush="{StaticResource TrayBorderBrush}"
                                     BorderThickness="1">
@@ -89,7 +92,7 @@
             <Setter.Value>
                 <ControlTemplate TargetType="Separator">
                     <Border Height="1"
-                            Margin="10,5"
+                            Margin="12,4"
                             Background="{StaticResource TrayBorderBrush}" />
                 </ControlTemplate>
             </Setter.Value>
@@ -97,21 +100,20 @@
     </Style>
 
     <Style x:Key="TrayContextMenuStyle" TargetType="ContextMenu">
-        <Setter Property="MinWidth" Value="220" />
-        <Setter Property="Padding" Value="3" />
+        <Setter Property="MinWidth" Value="208" />
         <Setter Property="Background" Value="Transparent" />
         <Setter Property="HasDropShadow" Value="True" />
+        <Setter Property="SnapsToDevicePixels" Value="True" />
+        <Setter Property="UseLayoutRounding" Value="True" />
         <Setter Property="Template">
             <Setter.Value>
                 <ControlTemplate TargetType="ContextMenu">
                     <Border Padding="3"
-                            CornerRadius="9"
+                            CornerRadius="8"
                             Background="{StaticResource TraySurfaceBrush}"
                             BorderBrush="{StaticResource TrayBorderBrush}"
                             BorderThickness="1">
-                        <ScrollViewer CanContentScroll="True">
-                            <ItemsPresenter KeyboardNavigation.DirectionalNavigation="Cycle" />
-                        </ScrollViewer>
+                        <ItemsPresenter KeyboardNavigation.DirectionalNavigation="Cycle" />
                     </Border>
                 </ControlTemplate>
             </Setter.Value>

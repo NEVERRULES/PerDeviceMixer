@@ -60,6 +60,8 @@ public interface IAudioService : IDisposable
     event EventHandler<AudioStateChangedEventArgs>? StateChanged;
 
     IReadOnlyList<AudioEndpointInfo> GetRenderDevices();
+    IReadOnlyList<string> GetActiveRenderDeviceIds() =>
+        GetRenderDevices().Select(device => device.Id).ToArray();
     IReadOnlyList<AudioEndpointInfo> GetCaptureDevices();
     string? GetDefaultRenderDeviceId();
     string? GetDefaultCaptureDeviceId();

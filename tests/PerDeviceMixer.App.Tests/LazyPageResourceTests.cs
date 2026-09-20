@@ -1,4 +1,5 @@
 using System.Windows;
+using System.Windows.Controls;
 
 namespace PerDeviceMixer.App.Tests;
 
@@ -12,12 +13,15 @@ public sealed class LazyPageResourceTests
         {
             try
             {
-                var application = new Application();
+                var application = new Application { ShutdownMode = ShutdownMode.OnExplicitShutdown };
+                HeadphoneBatteryCoordinatorTests.VerifyToastWindowLifecycle(application);
                 application.Resources.MergedDictionaries.Add(Load("MainWindowResources.xaml"));
                 var devices = Load("DevicesPageResources.xaml");
                 var settings = Load("SettingsPageResources.xaml");
+                var tray = Load("TrayMenuResources.xaml");
                 application.Resources.MergedDictionaries.Add(devices);
                 application.Resources.MergedDictionaries.Add(settings);
+                application.Resources.MergedDictionaries.Add(tray);
 
                 Assert.IsAssignableFrom<FrameworkElement>(
                     Assert.IsType<DataTemplate>(devices["DevicesPageTemplate"]).LoadContent());
@@ -27,6 +31,14 @@ public sealed class LazyPageResourceTests
                 settingsPage.Measure(new Size(1000, 2000));
                 settingsPage.Arrange(new Rect(settingsPage.DesiredSize));
                 settingsPage.UpdateLayout();
+
+                var trayMenu = new ContextMenu
+                {
+                    Style = Assert.IsType<Style>(tray["TrayContextMenuStyle"])
+                };
+                trayMenu.ApplyTemplate();
+                var trayMenuRoot = Assert.IsType<Border>(trayMenu.Template.LoadContent());
+                Assert.IsType<ItemsPresenter>(trayMenuRoot.Child);
                 application.Shutdown();
             }
             catch (Exception exception)
@@ -36,7 +48,7 @@ public sealed class LazyPageResourceTests
         });
         thread.SetApartmentState(ApartmentState.STA);
         thread.Start();
-        Assert.True(thread.Join(TimeSpan.FromSeconds(10)), "The WPF resource test did not finish.");
+        Assert.True(thread.Join(TimeSpan.FromSeconds(20)), "The WPF resource test did not finish.");
         Assert.Null(failure);
     }
 

@@ -128,6 +128,27 @@
                         <Button Grid.Column="1" Style="{StaticResource SecondaryButtonStyle}" Command="{Binding OpenMonoAudioSettingsCommand}" Content="打开设置" />
                     </Grid>
                 </Border>
+                <Border Padding="16,14">
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <StackPanel>
+                            <TextBlock FontWeight="SemiBold" Text="蓝牙免提电话（Handsfree）" />
+                            <TextBlock Margin="0,3,0,0"
+                                       Foreground="{StaticResource MutedBrush}"
+                                       FontSize="12"
+                                       TextWrapping="Wrap"
+                                       Text="开启（默认）：耳机既能听音乐，也能通话、使用麦克风。关闭：Windows 不再加载耳机通话端点，麦克风与语音通话不可用，听音乐不受影响。关闭通常不会加快音乐连接速度（两者分别协商）。点右侧按钮打开「设备和打印机」，右键你的耳机 → 属性 → 服务 → 取消勾选「免提电话服务」。" />
+                        </StackPanel>
+                        <Button Grid.Column="1"
+                                VerticalAlignment="Center"
+                                Style="{StaticResource SecondaryButtonStyle}"
+                                Command="{Binding OpenHandsfreeSettingsCommand}"
+                                Content="打开设备服务" />
+                    </Grid>
+                </Border>
             </StackPanel>
         </Border>
 

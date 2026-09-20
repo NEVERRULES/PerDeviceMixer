@@ -150,6 +150,62 @@ public sealed class DeviceSwitchToastTests
     }
 
     [Fact]
+    public void SupportedEndpointShowsWaitingStateUntilBatteryArrives()
+    {
+        var endpoint = CreateSupportedEndpoint();
+
+        Assert.Equal(
+            "正在读取耳机电量…",
+            DeviceSwitchToast.FormatBatteryToastText(
+                endpoint,
+                HeadphoneBatteryStatus.Inactive,
+                batteryDisplayEnabled: true));
+        Assert.True(DeviceSwitchToast.ShouldWaitForBattery(
+            endpoint,
+            HeadphoneBatteryStatus.Inactive,
+            batteryDisplayEnabled: true));
+    }
+
+    [Fact]
+    public void SupportedEndpointStopsWaitingWhenBatteryReadFails()
+    {
+        var endpoint = CreateSupportedEndpoint();
+        var status = new HeadphoneBatteryStatus(
+            true,
+            "Beats Fit Pro",
+            null,
+            "MonitorFailure");
+
+        Assert.Equal(
+            "暂时无法读取耳机电量",
+            DeviceSwitchToast.FormatBatteryToastText(
+                endpoint,
+                status,
+                batteryDisplayEnabled: true));
+        Assert.False(DeviceSwitchToast.ShouldWaitForBattery(
+            endpoint,
+            status,
+            batteryDisplayEnabled: true));
+    }
+
+    [Fact]
+    public void DisabledBatteryDisplayDoesNotShowWaitingState()
+    {
+        var endpoint = CreateSupportedEndpoint();
+
+        Assert.Equal(
+            string.Empty,
+            DeviceSwitchToast.FormatBatteryToastText(
+                endpoint,
+                HeadphoneBatteryStatus.Inactive,
+                batteryDisplayEnabled: false));
+        Assert.False(DeviceSwitchToast.ShouldWaitForBattery(
+            endpoint,
+            HeadphoneBatteryStatus.Inactive,
+            batteryDisplayEnabled: false));
+    }
+
+    [Fact]
     public void SupportedEndpointUsesHardwareIdentityInsteadOfDisplayName()
     {
         var endpoint = new AudioEndpointInfo(
@@ -167,4 +223,13 @@ public sealed class DeviceSwitchToastTests
         new(
             new AudioEndpointInfo("device", deviceName, true, volume, muted),
             []);
+
+    private static AudioEndpointInfo CreateSupportedEndpoint() =>
+        new(
+            "device",
+            "Beats Fit Pro",
+            true,
+            0.2f,
+            false,
+            "{1}.BTHENUM\\service_VID&0001004C_PID&2012\\device");
 }

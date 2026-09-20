@@ -1,0 +1,116 @@
+name: release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-release:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: 10.0.303
+
+      - name: Validate release tag
+        shell: pwsh
+        run: |
+          $properties = [xml](Get-Content -LiteralPath Directory.Build.props -Raw)
+          $version = [string]$properties.Project.PropertyGroup.Version
+          $expectedTag = "v$version"
+          if ($env:GITHUB_REF_NAME -ne $expectedTag) {
+              throw "Tag '$env:GITHUB_REF_NAME' does not match source version '$version'."
+          }
+          "RELEASE_VERSION=$version" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "RELEASE_TAG=$expectedTag" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "IS_PRERELEASE=$(($version.Contains('-')).ToString().ToLowerInvariant())" |
+              Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Install Inno Setup
+        shell: pwsh
+        run: |
+          $candidates = @(
+              "C:\Program Files (x86)\Inno Setup 6\ISCC.exe",
+              "C:\Program Files\Inno Setup 6\ISCC.exe"
+          )
+          if (-not ($candidates | Where-Object { Test-Path -LiteralPath $_ })) {
+              choco install innosetup --yes --no-progress
+              if ($LASTEXITCODE -ne 0) { throw "Inno Setup installation failed." }
+          }
+
+      - name: Verify formatting
+        shell: pwsh
+        run: |
+          dotnet restore PerDeviceMixer.slnx
+          if ($LASTEXITCODE -ne 0) { throw "Restore failed." }
+          dotnet format PerDeviceMixer.slnx --verify-no-changes --no-restore
+          if ($LASTEXITCODE -ne 0) { throw "Formatting verification failed." }
+
+      - name: Build distribution
+        shell: pwsh
+        run: .\build-distribution.ps1 -Version $env:RELEASE_VERSION
+
+      - name: Create draft release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $assetRoot = Join-Path $PWD "artifacts\release\$env:RELEASE_VERSION\assets"
+          $assets = @(
+              Join-Path $assetRoot "PerDeviceMixer-$env:RELEASE_VERSION-win-x64-Portable.zip"
+              Join-Path $assetRoot "PerDeviceMixer-$env:RELEASE_VERSION-win-x64-Setup.exe"
+              Join-Path $assetRoot "SHA256SUMS.txt"
+          )
+          $arguments = @(
+              "release", "create", $env:RELEASE_TAG,
+              "--verify-tag",
+              "--draft",
+              "--title", "PerDeviceMixer $env:RELEASE_VERSION",
+              "--generate-notes"
+          ) + $assets
+          gh @arguments
+          if ($LASTEXITCODE -ne 0) { throw "Draft release upload failed." }
+
+      - name: Verify uploaded assets
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $assetRoot = Join-Path $PWD "artifacts\release\$env:RELEASE_VERSION\assets"
+          $localAssets = @(Get-ChildItem -LiteralPath $assetRoot -File)
+          $release = gh release view $env:RELEASE_TAG --json assets | ConvertFrom-Json
+          if ($LASTEXITCODE -ne 0) { throw "Unable to read the draft release." }
+          foreach ($local in $localAssets) {
+              $remote = @($release.assets | Where-Object name -EQ $local.Name)
+              if ($remote.Count -ne 1) {
+                  throw "Release asset '$($local.Name)' is missing or duplicated."
+              }
+              $localDigest = "sha256:$((Get-FileHash -LiteralPath $local.FullName -Algorithm SHA256).Hash.ToLowerInvariant())"
+              if (-not [string]::Equals(
+                      [string]$remote[0].digest,
+                      $localDigest,
+                      [StringComparison]::OrdinalIgnoreCase)) {
+                  throw "Release asset digest mismatch: $($local.Name)"
+              }
+          }
+
+      - name: Publish verified release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $arguments = @("release", "edit", $env:RELEASE_TAG, "--draft=false")
+          if ($env:IS_PRERELEASE -eq "true") {
+              $arguments += "--prerelease"
+          }
+          else {
+              $arguments += "--latest"
+          }
+          gh @arguments
+          if ($LASTEXITCODE -ne 0) { throw "Publishing the verified release failed." }

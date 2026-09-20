@@ -1,6 +1,4 @@
-using System.Runtime.InteropServices;
 using System.Windows;
-using System.Windows.Interop;
 using System.Windows.Media.Animation;
 using System.Windows.Threading;
 using PerDeviceMixer.Core;
@@ -12,23 +10,26 @@ namespace PerDeviceMixer.App;
 /// work area. It appears whenever the default output device changes and shows
 /// the device name plus its master volume.
 /// </summary>
-public partial class DeviceSwitchToast : Window, IDisposable
+public sealed class DeviceSwitchToast : IDisposable
 {
-    private const int WindowLongExtendedStyle = -20;
-    private const int ExtendedStyleNoActivate = 0x08000000;
-    private const int ExtendedStyleTransparent = 0x00000020;
     private static readonly TimeSpan DisplayDuration = TimeSpan.FromMilliseconds(2500);
     private static readonly TimeSpan MaximumLifetime = TimeSpan.FromSeconds(6);
+    private static readonly TimeSpan BatteryWaitDuration = TimeSpan.FromSeconds(12);
     private static readonly TimeSpan FadeInDuration = TimeSpan.FromMilliseconds(150);
     private static readonly TimeSpan FadeOutDuration = TimeSpan.FromMilliseconds(250);
     private const double BottomMargin = 24;
+
+    private DeviceSwitchToastWindow? _window;
+    private readonly Dispatcher _dispatcher = Dispatcher.CurrentDispatcher;
+    private bool IsVisible => _window?.IsVisible == true;
+    internal event EventHandler? Dismissed;
 
     private readonly MixerEngine _engine;
     private readonly HeadphoneBatteryCoordinator _headphoneBattery;
     private readonly DispatcherTimer _displayTimer;
     private readonly DispatcherTimer _lifetimeTimer;
     private string? _lastShownDeviceId;
-    private DateTimeOffset _lastDeviceChangeUtc;
+    private bool _waitingForBattery;
     private bool _fadingOut;
     private bool _disposed;
 
@@ -38,18 +39,17 @@ public partial class DeviceSwitchToast : Window, IDisposable
     {
         _engine = engine;
         _headphoneBattery = headphoneBattery;
-        InitializeComponent();
         _displayTimer = new DispatcherTimer(
             DisplayDuration,
             DispatcherPriority.Background,
             OnDisplayTimerTick,
-            Dispatcher);
+            _dispatcher);
         _displayTimer.Stop();
         _lifetimeTimer = new DispatcherTimer(
             MaximumLifetime,
             DispatcherPriority.Background,
             OnLifetimeTimerTick,
-            Dispatcher);
+            _dispatcher);
         _lifetimeTimer.Stop();
         _lastShownDeviceId = GetCurrentSnapshot()?.Endpoint.Id;
         _engine.MixerChanged += OnMixerChanged;
@@ -90,6 +90,31 @@ public partial class DeviceSwitchToast : Window, IDisposable
                $"充电盒 {FormatBatteryValue(battery.CaseBatteryPercent, battery.CaseCharging)}";
     }
 
+    internal static string FormatBatteryToastText(
+        AudioEndpointInfo endpoint,
+        HeadphoneBatteryStatus status,
+        bool batteryDisplayEnabled)
+    {
+        if (!batteryDisplayEnabled || !HeadphoneBatteryCoordinator.IsSupportedEndpoint(endpoint))
+        {
+            return string.Empty;
+        }
+
+        if (status.Battery is not null) return FormatBatteryText(status);
+        return status.ErrorMessage is null
+            ? "正在读取耳机电量…"
+            : "暂时无法读取耳机电量";
+    }
+
+    internal static bool ShouldWaitForBattery(
+        AudioEndpointInfo endpoint,
+        HeadphoneBatteryStatus status,
+        bool batteryDisplayEnabled) =>
+        batteryDisplayEnabled &&
+        HeadphoneBatteryCoordinator.IsSupportedEndpoint(endpoint) &&
+        status.Battery is null &&
+        status.ErrorMessage is null;
+
     private static string FormatBatteryValue(int? percent, bool charging)
     {
         var value = percent.HasValue ? $"{percent.Value}%" : "--";
@@ -113,21 +138,21 @@ public partial class DeviceSwitchToast : Window, IDisposable
         if (eventArgs.Kind is not (
                 AudioChangeKind.DefaultDevice or
                 AudioChangeKind.MasterVolume)) return;
-        if (_disposed || Dispatcher.HasShutdownStarted) return;
-        _ = Dispatcher.BeginInvoke(() => HandleOnUiThread(eventArgs));
+        if (_disposed || _dispatcher.HasShutdownStarted) return;
+        _ = _dispatcher.BeginInvoke(() => HandleOnUiThread(eventArgs));
     }
 
     private void OnHeadphoneBatteryStatusChanged(
         object? sender,
         HeadphoneBatteryStatusChangedEventArgs eventArgs)
     {
-        if (_disposed || Dispatcher.HasShutdownStarted) return;
-        _ = Dispatcher.BeginInvoke(() => HandleBatteryOnUiThread(eventArgs.Status));
+        if (_disposed || _dispatcher.HasShutdownStarted) return;
+        _ = _dispatcher.BeginInvoke(() => HandleBatteryOnUiThread(eventArgs.Status));
     }
 
     private void HandleBatteryOnUiThread(HeadphoneBatteryStatus status)
     {
-        if (_disposed || !IsEnabledBySettings() || status.Battery is null) return;
+        if (_disposed || !IsVisible || !IsEnabledBySettings()) return;
         var snapshot = GetCurrentSnapshot();
         if (snapshot is null ||
             !status.IsSupportedDeviceActive ||
@@ -141,14 +166,17 @@ public partial class DeviceSwitchToast : Window, IDisposable
 
         if (IsVisible)
         {
+            _fadingOut = false;
+            _window?.BeginAnimation(UIElement.OpacityProperty, null);
+            if (_window is not null) _window.Opacity = 1;
             UpdateText(snapshot);
             PositionAtBottomCenter();
             _displayTimer.Stop();
             _displayTimer.Start();
-        }
-        else if (DateTimeOffset.UtcNow - _lastDeviceChangeUtc <= MaximumLifetime)
-        {
-            ShowToast(snapshot);
+            if (!_waitingForBattery)
+            {
+                _lifetimeTimer.Stop();
+            }
         }
     }
 
@@ -188,27 +216,50 @@ public partial class DeviceSwitchToast : Window, IDisposable
         }
     }
 
+    private bool IsBatteryDisplayEnabled()
+    {
+        try
+        {
+            return _engine.Profiles.Settings.ShowSupportedHeadphoneBattery;
+        }
+        catch
+        {
+            return true;
+        }
+    }
+
     private void HideToast()
     {
         _fadingOut = false;
-        BeginAnimation(OpacityProperty, null);
+        _waitingForBattery = false;
+        _window?.BeginAnimation(UIElement.OpacityProperty, null);
         _displayTimer.Stop();
         _lifetimeTimer.Stop();
-        if (IsVisible) Hide();
+        var window = _window;
+        _window = null;
+        if (window is null) return;
+        if (ReferenceEquals(Application.Current?.MainWindow, window))
+        {
+            Application.Current.MainWindow = null;
+        }
+        window.Close();
+        Dismissed?.Invoke(this, EventArgs.Empty);
     }
 
-    private void ShowToast(MixerSnapshot snapshot)
+    internal void ShowToast(MixerSnapshot snapshot)
     {
+        if (_disposed) return;
         _fadingOut = false;
         UpdateText(snapshot);
         _lastShownDeviceId = snapshot.Endpoint.Id;
-        _lastDeviceChangeUtc = DateTimeOffset.UtcNow;
         if (!IsVisible)
         {
-            Opacity = 0;
-            Show();
-            BeginAnimation(
-                OpacityProperty,
+            _window = new DeviceSwitchToastWindow();
+            UpdateText(snapshot);
+            _window.Opacity = 0;
+            _window.Show();
+            _window.BeginAnimation(
+                UIElement.OpacityProperty,
                 new DoubleAnimation(0d, 1d, FadeInDuration)
                 {
                     EasingFunction = new QuadraticEase { EasingMode = EasingMode.EaseOut }
@@ -216,42 +267,55 @@ public partial class DeviceSwitchToast : Window, IDisposable
         }
         else
         {
-            BeginAnimation(OpacityProperty, null);
-            Opacity = 1;
+            _window?.BeginAnimation(UIElement.OpacityProperty, null);
+            _window!.Opacity = 1;
         }
 
-        UpdateLayout();
+        _window!.UpdateLayout();
         PositionAtBottomCenter();
         _displayTimer.Stop();
         _displayTimer.Start();
-        if (!_lifetimeTimer.IsEnabled)
-        {
-            _lifetimeTimer.Start();
-        }
+        _lifetimeTimer.Stop();
+        _lifetimeTimer.Interval = _waitingForBattery
+            ? BatteryWaitDuration
+            : MaximumLifetime;
+        _lifetimeTimer.Start();
     }
 
     private void UpdateText(MixerSnapshot snapshot)
     {
-        DeviceNameText.Text = FormatDeviceName(snapshot);
-        VolumeText.Text = FormatVolumeText(snapshot);
-        var batteryText = FormatBatteryText(_headphoneBattery.CurrentStatus);
-        BatteryText.Text = batteryText;
-        BatteryText.Visibility = string.IsNullOrWhiteSpace(batteryText)
+        if (_window is null) return;
+        _window.DeviceNameText.Text = FormatDeviceName(snapshot);
+        _window.VolumeText.Text = FormatVolumeText(snapshot);
+        var batteryStatus = _headphoneBattery.CurrentStatus;
+        var batteryDisplayEnabled = IsBatteryDisplayEnabled();
+        var batteryText = FormatBatteryToastText(
+            snapshot.Endpoint,
+            batteryStatus,
+            batteryDisplayEnabled);
+        _waitingForBattery = ShouldWaitForBattery(
+            snapshot.Endpoint,
+            batteryStatus,
+            batteryDisplayEnabled);
+        _window.BatteryText.Text = batteryText;
+        _window.BatteryText.Visibility = string.IsNullOrWhiteSpace(batteryText)
             ? Visibility.Collapsed
             : Visibility.Visible;
     }
 
     private void PositionAtBottomCenter()
     {
+        if (_window is null) return;
         var area = SystemParameters.WorkArea;
-        Left = area.Left + Math.Max(0, (area.Width - ActualWidth) / 2);
-        Top = area.Bottom - ActualHeight - BottomMargin;
+        _window.Left = area.Left + Math.Max(0, (area.Width - _window.ActualWidth) / 2);
+        _window.Top = area.Bottom - _window.ActualHeight - BottomMargin;
     }
 
     private void OnDisplayTimerTick(object? sender, EventArgs eventArgs)
     {
         _displayTimer.Stop();
         if (!IsVisible) return;
+        if (_waitingForBattery) return;
         StartFadeOut();
     }
 
@@ -260,6 +324,7 @@ public partial class DeviceSwitchToast : Window, IDisposable
         _lifetimeTimer.Stop();
         _displayTimer.Stop();
         if (!IsVisible) return;
+        _waitingForBattery = false;
         StartFadeOut();
     }
 
@@ -276,24 +341,9 @@ public partial class DeviceSwitchToast : Window, IDisposable
             if (!_fadingOut) return;
             _fadingOut = false;
             _lifetimeTimer.Stop();
-            Hide();
+            HideToast();
         };
-        BeginAnimation(OpacityProperty, animation);
-    }
-
-    private void MakeClickThrough()
-    {
-        var handle = new WindowInteropHelper(this).Handle;
-        if (handle == IntPtr.Zero) return;
-        var extendedStyle = GetWindowLongPtr(handle, WindowLongExtendedStyle).ToInt64();
-        extendedStyle |= ExtendedStyleNoActivate | ExtendedStyleTransparent;
-        _ = SetWindowLongPtr(handle, WindowLongExtendedStyle, new IntPtr(extendedStyle));
-    }
-
-    protected override void OnSourceInitialized(EventArgs e)
-    {
-        base.OnSourceInitialized(e);
-        MakeClickThrough();
+        _window?.BeginAnimation(UIElement.OpacityProperty, animation);
     }
 
     public void Dispose()
@@ -306,13 +356,7 @@ public partial class DeviceSwitchToast : Window, IDisposable
         _displayTimer.Tick -= OnDisplayTimerTick;
         _lifetimeTimer.Stop();
         _lifetimeTimer.Tick -= OnLifetimeTimerTick;
-        Close();
+        HideToast();
         GC.SuppressFinalize(this);
     }
-
-    [DllImport("user32.dll", EntryPoint = "GetWindowLongPtrW")]
-    private static extern IntPtr GetWindowLongPtr(IntPtr window, int index);
-
-    [DllImport("user32.dll", EntryPoint = "SetWindowLongPtrW")]
-    private static extern IntPtr SetWindowLongPtr(IntPtr window, int index, IntPtr value);
 }

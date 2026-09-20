@@ -13,11 +13,16 @@ internal sealed class HeadphoneLowBatteryReminder
     {
         if (!status.IsSupportedDeviceActive || status.Battery is null)
         {
-            _notifiedComponents.Clear();
             return null;
         }
 
         var battery = status.Battery;
+        // Missing broadcasts, reconnects and coarse percentage fluctuations are not charging.
+        RearmComponent("left", battery.LeftBatteryPercent, battery.LeftCharging);
+        RearmComponent("right", battery.RightBatteryPercent, battery.RightCharging);
+        RearmComponent("case", battery.CaseBatteryPercent, battery.CaseCharging);
+        if (_notifiedComponents.Count != 0) return null;
+
         var newlyLow = new List<string>();
         EvaluateComponent("left", "左耳", battery.LeftBatteryPercent, battery.LeftCharging, newlyLow);
         EvaluateComponent("right", "右耳", battery.RightBatteryPercent, battery.RightCharging, newlyLow);
@@ -36,13 +41,15 @@ internal sealed class HeadphoneLowBatteryReminder
         bool charging,
         List<string> newlyLow)
     {
-        if (!percent.HasValue || percent.Value > ThresholdPercent)
-        {
-            _notifiedComponents.Remove(key);
-            return;
-        }
+        if (!percent.HasValue || percent.Value > ThresholdPercent) return;
 
         if (charging || !_notifiedComponents.Add(key)) return;
         newlyLow.Add($"{displayName}仅剩 {percent.Value}%");
+    }
+
+    private void RearmComponent(string key, int? percent, bool charging)
+    {
+        // Only valid charging observations for the alerted components end this cycle.
+        if (percent.HasValue && charging) _notifiedComponents.Remove(key);
     }
 }

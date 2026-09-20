@@ -49,6 +49,23 @@ public sealed class CoreAudioService : IAudioService
         return _dispatcher.Invoke(GetCaptureDevicesCore);
     }
 
+    public IReadOnlyList<string> GetActiveRenderDeviceIds()
+    {
+        ThrowIfDisposed();
+        return _dispatcher.Invoke(() =>
+        {
+            var devices = Enumerator.EnumerateAudioEndPoints(DataFlow.Render, DeviceState.Active);
+            var ids = new List<string>(devices.Count);
+            for (var index = 0; index < devices.Count; index++)
+            {
+                using var device = devices[index];
+                ids.Add(device.ID);
+            }
+
+            return (IReadOnlyList<string>)ids;
+        });
+    }
+
     public string? GetDefaultRenderDeviceId()
     {
         ThrowIfDisposed();

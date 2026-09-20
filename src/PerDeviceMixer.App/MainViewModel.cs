@@ -68,6 +68,7 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
         OpenDevicePropertiesCommand = new RelayCommand<AudioDeviceItem>(OpenDeviceProperties);
         OpenSoundDevicesCommand = new RelayCommand(SystemSoundSettings.OpenSoundDevices);
         AddBluetoothDeviceCommand = new RelayCommand(SystemSoundSettings.OpenBluetoothDevices);
+        OpenHandsfreeSettingsCommand = new RelayCommand(SystemSoundSettings.OpenBluetoothDeviceServices);
         OpenMonoAudioSettingsCommand = new RelayCommand(SystemSoundSettings.OpenMonoAudioSettings);
         CheckForUpdatesCommand = new AsyncRelayCommand(CheckForUpdatesAsync);
         DownloadAndInstallUpdateCommand = new AsyncRelayCommand(DownloadAndInstallUpdateAsync);
@@ -95,6 +96,7 @@ public sealed class MainViewModel : INotifyPropertyChanged, IDisposable
     public ICommand OpenDevicePropertiesCommand { get; }
     public ICommand OpenSoundDevicesCommand { get; }
     public ICommand AddBluetoothDeviceCommand { get; }
+    public ICommand OpenHandsfreeSettingsCommand { get; }
     public ICommand OpenMonoAudioSettingsCommand { get; }
     public ICommand CheckForUpdatesCommand { get; }
     public ICommand DownloadAndInstallUpdateCommand { get; }

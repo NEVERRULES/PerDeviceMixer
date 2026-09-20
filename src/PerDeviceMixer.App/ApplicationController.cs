@@ -41,6 +41,7 @@ internal sealed class ApplicationController : IDisposable
         await _engine.InitializeAsync(cancellationToken);
         _headphoneBattery.Start();
         _deviceSwitchToast = new DeviceSwitchToast(_engine, _headphoneBattery);
+        _deviceSwitchToast.Dismissed += OnTrayMenuClosed;
         _trayIcon = new TrayIconService(_engine, _headphoneBattery);
         _trayIcon.ShowRequested += OnShowRequested;
         _trayIcon.ExitRequested += OnExitRequested;
@@ -353,7 +354,11 @@ internal sealed class ApplicationController : IDisposable
         if (_disposed) return;
         _disposed = true;
         CancelBackgroundMemoryOptimization();
-        _deviceSwitchToast?.Dispose();
+        if (_deviceSwitchToast is not null)
+        {
+            _deviceSwitchToast.Dismissed -= OnTrayMenuClosed;
+            _deviceSwitchToast.Dispose();
+        }
         _deviceSwitchToast = null;
         if (_trayIcon is not null)
         {
